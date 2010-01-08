@@ -1,4 +1,3 @@
-
 == router - a Go package for remote channel communication ==
 
 ===1. introduction===
@@ -108,15 +107,15 @@ func router.New(seedId Id, bufSize int, disp DispatchPolicy, args ...) Router
 
    * logging and Logger
       * besides the above eight core system ids, there are two other ids providing system services: SysLogId and SysFaultId. They are normal ids and are predefined so that we can have logging and fault-reporting for router's internal implementation.
-      * to add logging to app code, embed Logger and use its two methods Log()/LogError().
-      * to recv log msgs, attach a recv [chan *LogRecord] to SysLogId. If attached to SysLogId with ScopeLocal, recv chan will recv log msgs from local router. If attached with ScopeGlobal, recv chan will also recv/pull log msgs from connected remote routers.
+      * to add logging to app code, embed Logger and use its two methods `Log()/LogError()`.
+      * to recv log msgs, attach a recv `[chan *LogRecord]` to SysLogId. If attached to SysLogId with ScopeLocal, recv chan will recv log msgs from local router. If attached with ScopeGlobal, recv chan will also recv/pull log msgs from connected remote routers.
       * If no recv chan is attached to SysLogId, logging is disabled without any log msgs buffered
 
    * fault handling and FaultReporter
       * raising fault is basically sending FaultRecord msgs to SysFaultId.
-      * to add fault reporting to app code, embed FaultRaiser and use its method Raise().
-      * to handle/manage faults, attach a recv [chan *FaultRecord] to SysFaultId. If attached to SysFaultId with ScopeLocal, recv chan will recv FaultRecord msgs from local router. If attached with ScopeGlobal, recv chan will also recv/pull FaultRecord msgs from connected remote routers.
-      * If no recv chan is attached to SysFaultId, there is no fault handling. calling Raise() will crash app.
+      * to add fault reporting to app code, embed FaultRaiser and use its method `Raise()`.
+      * to handle/manage faults, attach a recv `[chan *FaultRecord]` to SysFaultId. If attached to SysFaultId with ScopeLocal, recv chan will recv FaultRecord msgs from local router. If attached with ScopeGlobal, recv chan will also recv/pull FaultRecord msgs from connected remote routers.
+      * If no recv chan is attached to SysFaultId, there is no fault handling. calling `Raise()` will crash app.
 
 ===7. Connecting remote routers===
    * marshaling
