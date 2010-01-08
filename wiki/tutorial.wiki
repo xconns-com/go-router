@@ -1,6 +1,5 @@
-#router - A Go Package For Remote Channel Communication
 
-== router - A Go Package For Remote Channel Communication ==
+== router - a Go package for remote channel communication ==
 
 ===1. introduction===
 
@@ -100,12 +99,12 @@ func router.New(seedId Id, bufSize int, disp DispatchPolicy, args ...) Router
    user code can subscribe (attach recv chan to) to the above ids to learn system state changes and react accordingly
 
    * namespace monitoring
-      user code can track router's namespace change by subscribing (attach recv [chan IdChanInfo] to) these four system ids: PubId/UnPubId/SubId/UnSubId. then user code will recv msgs when new chans are attached or existing chans are detached to router
+      user code can track router's namespace change by subscribing `(attach recv [chan IdChanInfo] to)` these four system ids: PubId/UnPubId/SubId/UnSubId. then user code will recv msgs when new chans are attached or existing chans are detached to router
 
-      user code can call router.IdsForSend(predicate)/IdsForRecv(predicate) to get a snapshot of current router namespace
+      user code can call `router.IdsForSend(predicate)/IdsForRecv(predicate)` to get a snapshot of current router namespace
       
    * connection monitoring
-      user code can track the connection status of its router to remote routers by subscribing (attach recv [chan ConnInfoMsg]) to these four system ids: RouterConnId/RouterDisconnId/ConnErrorId/ConnReadyId
+      user code can track the connection status of its router to remote routers by subscribing `(attach recv [chan ConnInfoMsg])` to these four system ids: RouterConnId/RouterDisconnId/ConnErrorId/ConnReadyId
 
    * logging and Logger
       * besides the above eight core system ids, there are two other ids providing system services: SysLogId and SysFaultId. They are normal ids and are predefined so that we can have logging and fault-reporting for router's internal implementation.
