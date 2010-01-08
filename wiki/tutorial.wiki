@@ -2,7 +2,7 @@
 
 ===1. introduction===
 
-"router" is a Go package for remote channel communication, based on peer-peer pub/sub model. Basically we attach a send chan to an id in router to send msgs, and attach a recv chan to an id to recv msgs. If these 2 ids match, the msgs from send chan will be "routed" to recv chan, e.g.
+"router" is a Go package for remote channel communication based on peer-peer pub/sub model. Basically we attach a send chan to an id in router to send msgs, and attach a recv chan to an id to recv msgs. If these 2 ids match, the msgs from send chan will be "routed" to recv chan, e.g.
 {{{
    rot := router.New(...)
    chan1 := make(chan string)
