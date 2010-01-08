@@ -49,9 +49,9 @@ func router.New(seedId Id, bufSize int, disp DispatchPolicy, args ...) Router
 }}}
 ===3. Id===
    Each id contains three pieces of data:
-   . Val - used as key in routing
-   . Scope - the scope to send/recv msgs
-   . Membership - local/remote peer, identifying if peers are inside same router or not
+   * Val - used as key in routing
+   * Scope - the scope to send/recv msgs
+   * Membership - local/remote peer, identifying if peers are inside same router or not
    * Scope
       Scope defines the range of send/recv operations. there are three scopes:
       * ScopeLocal`:` send msgs to local peers in the same router, or recv msgs from local peers
