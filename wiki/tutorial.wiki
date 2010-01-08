@@ -127,7 +127,7 @@ func router.New(seedId Id, bufSize int, disp DispatchPolicy, args ...) Router
         all ids in the intersection of router1's input interface (its set of recv ids with global / remote scope) and router2's output interface (its set of send ids with global / remote scope)
       * Ids merging from router1 to router2:
         all ids in the intersection of router2's input interface (its set of recv ids with global / remote scope) and router1's output interface (its set of send ids with global / remote scope)
-      * new ids are propogated to connected routers according to its id / membership / scope.
+      * new ids are propogated automatically to connected routers according to its id / membership / scope.
       * when routers are disconnected, routers' namespaces will be updated automatically so that all publications and subscriptions from remote channels will be removed.
 
 ===8. Reference===
