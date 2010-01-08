@@ -72,7 +72,9 @@ func router.New(seedId Id, bufSize int, disp DispatchPolicy, args ...) Router
 
 ===4. dispatchers===
    router is created with the following constructor:
+{{{
    rot := router.New(SeedId, chanBufSize, dispatchPolicy, ...)
+}}}
    dispatchPolicy defines how the values from a send chan are dispatched to its bound recv chans. Three simple dispatchers can be used now: broadcast/round-robin/random.
    need more work here.
 
