@@ -56,7 +56,7 @@ func router.New(seedId Id, bufSize int, disp DispatchPolicy, args ...) Router
    . Membership - local/remote peer, identifying if peers are inside same router or not
    * Scope
       Scope defines the range of send/recv operations. there are three scopes:
-      ScopeLocal: send msgs to local peers in the same router, or recv msgs
+      * ScopeLocal send msgs to local peers in the same router, or recv msgs
                   from local peers
       ScopeRemote: send msgs to remote peers in connected routers, or
                    recv msgs from remote peers
