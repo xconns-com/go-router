@@ -116,7 +116,7 @@ Here is a sample showing various usage: http://code.google.com/p/go-router/sourc
       * raising fault is basically sending FaultRecord msgs to RouterFaultId, or app specific fault ids.
       * to add fault reporting to app code, embed FaultRaiser and use its method `Raise()`.
       * to handle/manage faults, attach a recv `[chan *FaultRecord]` to FaultId. If attached to FaultId with ScopeLocal, recv chan will recv FaultRecord msgs from local router. If attached with ScopeGlobal, recv chan will also recv/pull FaultRecord msgs from connected remote routers.
-      * If no recv chan is attached to SysFaultId, there is no fault handling. calling `Raise()` will crash app.
+      * If no recv chan is attached to FaultId, there is no fault handling. calling `Raise()` will crash app.
 
 ===7. Connecting remote routers===
    * marshaling
