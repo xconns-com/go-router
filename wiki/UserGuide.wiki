@@ -42,17 +42,15 @@ func New(seedId Id, bufSize int, disp DispatchPolicy, args ...) Router
 }}}
 router.New(...) accepts the following arguments:
     # seedId: a dummy id to show what type of ids will be used. New ids will be type-checked against this.
-    # bufSize: by default, 32 is the default size for router's internal channels.
-                if bufSize > 0, its value will be used.
+    # bufSize: by default, 32 is the default size for router's internal channels. if bufSize > 0, its value will be used.
     # disp: dispatch policy for router. by default, it is BroadcastPolicy
     # optional arguments ...:
-            * name:     router's name, if name is defined, router internal logging will be turned on,
-                      ie LogRecord generated
-            * LogScope: if this is set, a console log sink is installed to show router internal log
-                      if logScope == ScopeLocal, only log msgs from local router will show up
-                      if logScope == ScopeGlobal, all log msgs from connected routers will show up
+            * name:     router's name, if name is defined, router internal logging will be turned on, ie LogRecord generated
+            * LogScope: if this is set, a console log sink is installed to show router internal log:
+                     * if logScope == ScopeLocal, only log msgs from local router will show up
+                     * if logScope == ScopeGlobal, all log msgs from connected routers will show up
 
-Router's Connect()/ConnectRemote() methods are just convenience wrappers which forward call to Proxy's Connect()/ConnectRemote().
+Router's Connect() / ConnectRemote() methods are just convenience wrappers which forward call to Proxy's Connect() / ConnectRemote().
 
 The components plugged into Router are:
    * Id: there are predefined Id types to allow use use integer, string, path name or MsgId in router
@@ -64,7 +62,7 @@ more detials can be found in the following.
 
 Proxy is the primary interface to connect router to its peer router. At both ends of a connection, there is a proxy object for its router. Simple router connection can be set up thru calling Router.Connect(). Proxy.Connect()/ConnectRemote() are used to set up more connections details, such as setting IdFilter to allow only a subset of messages pass thru the connection, or setting IdTranslator which can "relocate" remote message ids into a subspace in local router's namespace.
 Proxy.Close() is called to disconnect router from its peer.
-
+{{{
 type Proxy interface {
 	Connect(Proxy) os.Error
 	ConnectRemote(io.ReadWriteCloser, MarshallingPolicy) os.Error
@@ -73,22 +71,22 @@ type Proxy interface {
 }
 
 func NewProxy(r Router, name string, f IdFilter, t IdTranslator) Proxy
-
+}}}
 NewProxy(...) accepts the following arguments:
-    1. r:    the router which will be bound with this proxy and be owner of this proxy
-    2. name: proxy's name, used in log messages if owner router's log is turned on
-    3. f:    IdFilter to be installed at this proxy
-    4. t:    IdTranslator to be installed at this proxy
+    # r:    the router which will be bound with this proxy and be owner of this proxy
+    # name: proxy's name, used in log messages if owner router's log is turned on
+    # f:    IdFilter to be installed at this proxy
+    # t:    IdTranslator to be installed at this proxy
 
 The components plugged into Proxy are:
-    . Marshaling: there are two predefined marshaling polcies: GobMarshaling use package "gob" and JsonMarshaling use package "json".
-    . IdFilter and IdTranslator: there are no predefined filters and translators; applications can define them with application specific rules.
+    * Marshaling: there are two predefined marshaling polcies: GobMarshaling use package "gob" and JsonMarshaling use package "json".
+    * IdFilter and IdTranslator: there are no predefined filters and translators; applications can define them with application specific rules.
 
 More details about components can be found in following.
 
-2. Components which are plugged into Router and Proxy.
+===2. Components which are plugged into Router and Proxy.===
 
-2.1 Id
+====2.1 Id====
    Each id contains three pieces of data:
    . Val - used as key in routing
    . Scope - the scope to send/recv msgs
