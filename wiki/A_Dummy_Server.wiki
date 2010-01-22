@@ -19,20 +19,20 @@ In my understanding, the above rules are simply another interpretation of the pr
 As an exercise, we'll try to implement a dummy server following the above message based design. And use a goroutine for each application task.
 
 normally, we'll partition the id space into sections, each of which is for an application functionality, handled by one or a group of tasks. for example, if we use integer as ids, we can divide id space as following:
-          . 101-200 for system management
-          . 201-300 for performance management
-          . 301-400 for fault management
-          . ...
+          * 101-200 for system management
+          * 201-300 for performance management
+          * 301-400 for fault management
+          * ...
 
-1> System partition
+====2.1 System partition====
 
 For our dummy server, i'll use path names as ids and partition the systems as following:
 
-<1> SystemManager Task
+  # SystemManager Task
     To make our server reliable, let's have two server instances running at the same time, one active (serving the requests), one standby (ready to replace the active one)
     SysteManager at standby server monitors the heartbeats from active server, if 2 heartbeats miss in a row, standby will become active and start serving user requests
     SystemManager at active server will send heartbeats to standby, and send commands to other tasks to drive their life cycle.
-   A> messages sent
+    # messages sent
       /Sys/Ctrl/Heartbeat
           active servant sends heartbeats to standby servant
       /Sys/Command
