@@ -1,20 +1,20 @@
-        << a dummy server tries to be reliable - in the way of telecom switch >>
+==a dummy server tries to be reliable - in the way of telecom switch==
 
-1. Background
+===1. Background===
 
 In the past, i had the luck to work in telecom industry developing switch control software. A telecom switch is a distributed system of relative size: a backbone switch can have 2-3 frames, each frame contains 8 or 16 shelves, each shelf contains 16 or 32 slots, into each slot we can insert a card/board, the card/board contains circuits for application logic: io ports, switch fabric, or control, etc.. normally a card/board has a CPU, switch/shelf controllers use two boards/CPUs, one active and one standby. 
 
 In the various projects i worked with, there were two kinds of software designs. One uses layers of OO frameworks and design patterns and using Corba for inter-controller communications. The resulted systems are complicated. The other uses plain old C and light weight message passing, and a few simple rules as described below. The resulted system is relatively simple and scalable.
 
 The simple rules for message passing based design are as following:
-1> partition application functionalities into distinct tasks (threads or processes)
-2> define the interactions between tasks as messages (message ids and message data structs). in other words, define the public interfaces of tasks as the set of messages they will send and the set of messages they will recv
-3> one task can only interact with another task by sending messages to it. a task's state is private (normally one part of application state) which no other tasks can change directly without going thru the messaging interface.
+# partition application functionalities into distinct tasks (threads or processes)
+# define the interactions between tasks as messages (message ids and message data structs). in other words, define the public interfaces of tasks as the set of messages they will send and the set of messages they will recv
+# one task can only interact with another task by sending messages to it. a task's state is private (normally one part of application state) which no other tasks can change directly without going thru the messaging interface.
 
 In my understanding, the above rules are simply another interpretation of the principle Rob and other Go developers have advocated:
    "Do not communicate by sharing memory; instead, share memory by communicating."
 
-2. Design
+===2. Design===
 
 As an exercise, we'll try to implement a dummy server following the above message based design. And use a goroutine for each application task.
 
