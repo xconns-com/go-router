@@ -106,8 +106,8 @@ Each task is a running goroutine which will go thru the following standard stage
 
 The following are the jobs performed at each stage:
   * init
-    create channels and attach channels to ids in router
-    possible other jobs:
+    * create channels and attach channels to ids in router
+    * possible other jobs:
        * load config data
        * open conn to database
        * open conn to backend legacy server
