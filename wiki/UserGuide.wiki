@@ -1,4 +1,4 @@
-                        == User Guide ==
+== User Guide ==
 
 "Interface" in Go language enables the "duck-typing" style of software composition, in which components can be plugged together as long as they provide the methods defined in interfaces. It does not require any kind of inheritance hierarchy in code (neither interface inheritance such as Java's "implement" nor implementation inheritance such as Java's "extend"). This allows libraries (or packages) to be designed as "plug and play" frameworks with a set of components, and the framework will define the interfaces of components. "router" is designed and implemented this way. Users can use "router" in two typical ways: 1> based on application's specific requirements, choose from the set of provided components and use them with router; 2> create customized components according to the interfaces defined, and plug them into router.
 
@@ -87,31 +87,28 @@ More details about components can be found in following.
 ===2. Components which are plugged into Router and Proxy.===
 
 ====2.1 Id====
-   Each id contains three pieces of data:
-   . Val - used as key in routing
-   . Scope - the scope to send/recv msgs
-   . Membership - local/remote peer, identifying if peers are inside same router or not
-   1> Scope
+Each id contains three pieces of data:
+   * Val - used as key in routing
+   * Scope - the scope to send/recv msgs
+   * Membership - local/remote peer, identifying if peers are inside same router or not
+   # Scope
       Scope defines the range of send/recv operations. there are three scopes:
-      ScopeLocal: send msgs to local peers in the same router, or recv msgs
-                  from local peers
-      ScopeRemote: send msgs to remote peers in connected routers, or
-                   recv msgs from remote peers
-      ScopeGlobal: send msgs to all local/remote peers, or recv msgs from
-                   all local/remote peers
+      ScopeLocal: send msgs to local peers in the same router, or recv msgs from local peers
+      ScopeRemote: send msgs to remote peers in connected routers, or recv msgs from remote peers
+      ScopeGlobal: send msgs to all local/remote peers, or recv msgs from all local/remote peers
       the default attributes of id is ScopeGlobal (and Membership = MemberLocal)
-   2> matching algorithm
+   # matching algorithm
       different types of ids use diff matching algorithms:
-      . exact match: for int/string/struct ids
-      . prefix match: for pathname ids
-      . assoc match: for regex ids or tuple ids (future)
-   3> binding
-      When send/recv chans are attached to router, their ids are matched against ids of chans
-      which are already attached, and their bindings will be decided:
+      * exact match: for int/string/struct ids
+      * prefix match: for pathname ids
+      * assoc match: for regex ids or tuple ids (future)
+   # binding
+      When send/recv chans are attached to router, their ids are matched against ids of chans which are already attached, and their bindings will be decided:
       For send chan, its bindings is the set of recv chans with matched id.
       For recv chan, its bindings is the set of send chans with matched id.
 
-   There are four predefined id types: IntId, StrId, PathId and MsgId, all implementing the following interface:
+There are four predefined id types: IntId, StrId, PathId and MsgId, all implementing the following interface:
+{{{
 type Id interface {
 	//methods to query Id content
 	Scope() int
@@ -132,15 +129,15 @@ type Id interface {
 	//Stringer interface
 	String() string
 }
-
+}}}
 Applications can define their own customized id type according to the above interface, and use it in router.
 
-2.2 Dispatcher
+====2.2 Dispatcher====
 
 Dispatchers define how the values from a send channel are dispatched to the recv channels bound to it. DispatcherPolicy is used to create instances of disptachers. Some dispatchers are stateful, such as roundrobin, we need a separate dispatcher for each send channel. A instance of DispatchPolicy is passed into router's constructor, which will define router's overall dispatching behaviour.
 
 There are three predefined dispatchers: broadcast, roundrobin and random, all implementing the following interfaces:
-
+{{{
 type Dispatcher interface {
 	Dispatch(v interface{}, recvers []*endpoint)
 }
@@ -148,15 +145,15 @@ type Dispatcher interface {
 type DispatchPolicy interface {
 	NewDispatcher() Dispatcher
 }
-
+}}}
 Customized dispatchers can be created according to these interfaces and plugged into router.
 
-2.3 Marshaling
+====2.3 Marshaling====
 
 For remote router connections (thru sockets or others), we need to marshal the values or messages from local send channel into data streams, pass thru io connection, and at remote router, demarshal back into values or messages to forward to remote recv channels.
 
 There are three interfaces involved. MarshallingPolicy is used to create instances of Marshaler and Demarshaler. There are two predefined marshaling policies: GobMarshaling using "gob" and JsonMarshaling using "json", all implementing the following interfaces:
-
+{{{
 type Marshaler interface {
 	Marshal(interface{}) os.Error
 }
@@ -169,31 +166,25 @@ type MarshallingPolicy interface {
 	NewMarshaler(io.Writer) Marshaler
 	NewDemarshaler(io.Reader) Demarshaler
 }
-
+}}}
 Customized marshaling policies can be created according to the above interfaces and plugged into Proxy.
 
-2.4 IdFilter & IdTranslator
+====2.4 IdFilter & IdTranslator====
 
-When two routers connect, their namespaces will merge as following to enable channels in
-      one router to communicate to channels in the other router transparently:
-      . Ids merging from router2 to router1: 
-        all ids in the intersection of router1's input interface (its set of recv ids with global /
-            remote scope) and router2's output interface (its set of send ids with global / remote
-            scope)
-      . Ids merging from router1 to router2:
-        all ids in the intersection of router2's input interface (its set of recv ids with global /
-            remote scope) and router1's output interface (its set of send ids with global / remote
-            scope)
-      . new ids are propagated automatically to connected routers according to its id / scope / membership.
-      . when routers are disconnected, routers' namespaces will be updated automatically so that 
-        all publications and subscriptions from remote routers will be removed.
+When two routers connect, their namespaces will merge as following to enable channels in one router to communicate to channels in the other router transparently:
+      * Ids merging from router2 to router1: 
+        all ids in the intersection of router1's input interface (its set of recv ids with global / remote scope) and router2's output interface (its set of send ids with global / remote scope)
+      * Ids merging from router1 to router2:
+        all ids in the intersection of router2's input interface (its set of recv ids with global / remote scope) and router1's output interface (its set of send ids with global / remote scope)
+      * new ids are propagated automatically to connected routers according to its id / scope / membership.
+      * when routers are disconnected, routers' namespaces will be updated automatically so that all publications and subscriptions from remote routers will be removed.
 
 To manage namespace changes, we can apply IdFilter and IdTranslator at Proxy for the following effects:
-   . IdFilter: allow only a specific set of Ids (and their messages) to pass thru a connection
-   . IdTranslator: relocate ids / messages from a connection to a "subspace" in local namespace
+   * IdFilter: allow only a specific set of Ids (and their messages) to pass thru a connection
+   * IdTranslator: relocate ids / messages from a connection to a "subspace" in local namespace
 
 The interfaces are defined as following:
-
+{{{
 type IdFilter interface {
 	BlockInward(Id) bool
 	BlockOutward(Id) bool
@@ -203,5 +194,5 @@ type IdTranslator interface {
 	TranslateInward(Id) Id
 	TranslateOutward(Id) Id
 }
-
+}}}
 Customized filters and translators can be defined according the above interfaces and with application specific logic.
