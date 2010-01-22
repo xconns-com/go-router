@@ -1,18 +1,18 @@
-                        << User Guide >>
+                        == User Guide ==
 
 "Interface" in Go language enables the "duck-typing" style of software composition, in which components can be plugged together as long as they provide the methods defined in interfaces. It does not require any kind of inheritance hierarchy in code (neither interface inheritance such as Java's "implement" nor implementation inheritance such as Java's "extend"). This allows libraries (or packages) to be designed as "plug and play" frameworks with a set of components, and the framework will define the interfaces of components. "router" is designed and implemented this way. Users can use "router" in two typical ways: 1> based on application's specific requirements, choose from the set of provided components and use them with router; 2> create customized components according to the interfaces defined, and plug them into router.
 
-1. router's Major Components
+===1. router's Major Components===
  
 Router and Proxy provide the "plug and play" framework.
 
-1.1 Router
+====1.1 Router====
 
 Router is the main access point to functionality. Applications will create an instance of it thru router.New(...) and attach channels to ids in the instance. It maintains the pub/sub namespace and sends notifications when namespace change.
 
 Router's main methods are as following:
+{{{
 type Router interface {
-
 	//Attach chans to id in router, with an optional argument (chan BindEvent)
 	//When specified, the optional argument will serve two purposes:
 	//1. used to tell when other ends connecting/disconn
@@ -39,29 +39,28 @@ type Router interface {
 }
 
 func New(seedId Id, bufSize int, disp DispatchPolicy, args ...) Router
-
+}}}
 router.New(...) accepts the following arguments:
-    1. seedId: a dummy id to show what type of ids will be used. New ids will be type-checked against this.
-    2. bufSize: by default, 32 is the default size for router's internal channels.
+    # seedId: a dummy id to show what type of ids will be used. New ids will be type-checked against this.
+    # bufSize: by default, 32 is the default size for router's internal channels.
                 if bufSize > 0, its value will be used.
-    3. disp: dispatch policy for router. by default, it is BroadcastPolicy
-    4. optional arguments ...:
-            name:     router's name, if name is defined, router internal logging will be turned on,
+    # disp: dispatch policy for router. by default, it is BroadcastPolicy
+    # optional arguments ...:
+            * name:     router's name, if name is defined, router internal logging will be turned on,
                       ie LogRecord generated
-            LogScope: if this is set, a console log sink is installed to show router internal log
+            * LogScope: if this is set, a console log sink is installed to show router internal log
                       if logScope == ScopeLocal, only log msgs from local router will show up
                       if logScope == ScopeGlobal, all log msgs from connected routers will show up
-
 
 Router's Connect()/ConnectRemote() methods are just convenience wrappers which forward call to Proxy's Connect()/ConnectRemote().
 
 The components plugged into Router are:
-   . Id: there are predefined Id types to allow use use integer, string, path name or MsgId in router
-   . Dispatcher: there are three predefined dispatchers: broadcast, roundrobin, random
+   * Id: there are predefined Id types to allow use use integer, string, path name or MsgId in router
+   * Dispatcher: there are three predefined dispatchers: broadcast, roundrobin, random
 
 more detials can be found in the following.
 
-1.2 Proxy
+====1.2 Proxy====
 
 Proxy is the primary interface to connect router to its peer router. At both ends of a connection, there is a proxy object for its router. Simple router connection can be set up thru calling Router.Connect(). Proxy.Connect()/ConnectRemote() are used to set up more connections details, such as setting IdFilter to allow only a subset of messages pass thru the connection, or setting IdTranslator which can "relocate" remote message ids into a subspace in local router's namespace.
 Proxy.Close() is called to disconnect router from its peer.
