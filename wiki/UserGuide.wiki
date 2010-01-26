@@ -93,9 +93,9 @@ Each id contains three pieces of data:
    * Membership - local/remote peer, identifying if peers are inside same router or not
    # Scope
       Scope defines the range of send/recv operations. there are three scopes:
-      ScopeLocal: send msgs to local peers in the same router, or recv msgs from local peers
-      ScopeRemote: send msgs to remote peers in connected routers, or recv msgs from remote peers
-      ScopeGlobal: send msgs to all local/remote peers, or recv msgs from all local/remote peers
+      * ScopeLocal: send msgs to local peers in the same router, or recv msgs from local peers
+      * ScopeRemote: send msgs to remote peers in connected routers, or recv msgs from remote peers
+      * ScopeGlobal: send msgs to all local/remote peers, or recv msgs from all local/remote peers
       the default attributes of id is ScopeGlobal (and Membership = MemberLocal)
    # matching algorithm
       different types of ids use diff matching algorithms:
@@ -104,8 +104,8 @@ Each id contains three pieces of data:
       * assoc match: for regex ids or tuple ids (future)
    # binding
       When send/recv chans are attached to router, their ids are matched against ids of chans which are already attached, and their bindings will be decided:
-      For send chan, its bindings is the set of recv chans with matched id.
-      For recv chan, its bindings is the set of send chans with matched id.
+      * For send chan, its bindings is the set of recv chans with matched id.
+      * For recv chan, its bindings is the set of send chans with matched id.
 
 There are four predefined id types: IntId, StrId, PathId and MsgId, all implementing the following interface:
 {{{
