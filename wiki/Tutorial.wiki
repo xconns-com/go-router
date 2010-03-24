@@ -47,7 +47,7 @@ type Router interface {
 
 func router.New(seedId Id, bufSize int, disp DispatchPolicy, args ...) Router
 }}}
-Here is a sample showing various usage: http://code.google.com/p/go-router/source/browse/trunk/samples/test1.go
+Here is a sample showing various usage: http://code.google.com/p/go-router/source/browse/trunk/samples/test_router1.go
 ===3. Id===
    Each id contains three pieces of data:
       * Val - used as key in routing
