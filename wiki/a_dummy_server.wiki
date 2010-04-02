@@ -146,8 +146,8 @@ To simplify our code, the dummy server code is organized as following:
 ===4. How to run it===
 
   # in one console, run "./server" to start the server
-  # in 2nd console, run "./client news 1234" to start a client to talk to "news" service in server for 1234 times
-  #  in 3rd console, run "./client stock 1234" to start a client to talk to "stock" service in server for 1234 times
+  # in 2nd console, run "./client news 123456" to start a client to talk to "news" service in server for 123456 times
+  #  in 3rd console, run "./client stock 123456" to start a client to talk to "stock" service in server for 123456 times
   # observe the trace messages in server console, see how the standby servant will come up automatically when active servant goes out of service:
 {{{
 App Service [ news ] at [ servant1 ] process req:  request 1616
