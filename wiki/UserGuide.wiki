@@ -13,12 +13,14 @@ Router is the main access point to functionality. Applications will create an in
 Router's main methods are as following:
 {{{
 type Router interface {
-	//Attach chans to id in router, with an optional argument (chan BindEvent)
+	//Attach channels to ids in router, with an optional argument (chan *BindEvent)
+	//currently only accept the following chan types: chan bool/int/float/string/*struct
 	//When specified, the optional argument will serve two purposes:
-	//1. used to tell when other ends connecting/disconn
+	//1. used to tell when the remote peers connecting/disconn
 	//2. in AttachRecvChan, used as a flag to ask router to keep recv chan open when all senders close
-	AttachSendChan(Id, interface{}, ...) os.Error
-	AttachRecvChan(Id, interface{}, ...) os.Error
+	//the returned Endpoint object can be used to find the number of bound peers: endp.NumBindings()
+	AttachSendChan(Id, interface{}, ...) (*Endpoint, os.Error)
+	AttachRecvChan(Id, interface{}, ...) (*Endpoint, os.Error)
 
 	//Detach sendChan/recvChan from router
 	DetachChan(Id, interface{}) os.Error
