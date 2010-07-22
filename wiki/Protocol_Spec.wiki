@@ -1,0 +1,5 @@
+The connection between routers uses the same protocol as another project: *Channel* (http://channel.sourceforge.net).
+
+The original protocol spec is here: http://channel.sourceforge.net/boost_channel/libs/channel/doc/protocol.html
+
+To read from the context of go-router, we need to do some terminology conversions, such as Channel to router, names to ids, etc.
