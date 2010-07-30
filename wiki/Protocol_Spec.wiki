@@ -1,4 +1,4 @@
-The connection between routers uses the same protocol as another project: *Channel* (http://channel.sourceforge.net).
+The connection between routers uses a similar protocol as another project: *Channel* (http://channel.sourceforge.net) with minor variations.
 
 The original protocol spec is here: http://channel.sourceforge.net/boost_channel/libs/channel/doc/protocol.html
 
