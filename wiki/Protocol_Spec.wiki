@@ -1,5 +1,49 @@
+===1. History===
 The connection between routers uses a similar protocol as another project: *Channel* (http://channel.sourceforge.net) with minor variations.
 
-The original protocol spec is here: http://channel.sourceforge.net/boost_channel/libs/channel/doc/protocol.html
+The original protocol spec is here: http://channel.sourceforge.net/boost_channel/libs/channel/doc/protocol.html. To read from the context of go-router, we need to do some terminology conversions, such as Channel to router, Names to Ids, Interface to Proxies, etc.
 
-To read from the context of go-router, we need to do some terminology conversions, such as Channel to router, names to ids, etc.
+Current implementations of router1/router2 since Febrary have been briefly described in Tutorial and UserGuide wikis, and reiterated here.
+
+===2. System Message Ids===
+
+In "router" there are eight system ids:
+{{{
+        RouterConnId
+        RouterDisconnId
+        ConnErrorId
+        ConnReadyId
+        PubId
+        UnPubId
+        SubId
+        UnSubId
+}}}
+    user code can subscribe (attach recv chan to) to the above ids to learn system state changes and react accordingly 
+
+    * namespace monitoring
+
+          user code can track router's namespace change by subscribing to these four system ids: PubId/UnPubId/SubId/UnSubId.
+
+    * connection monitoring
+
+          user code can track the connection status of its router to remote routers by subscribing to these four system ids: RouterConnId/RouterDisconnId/ConnErrorId/ConnReadyId.
+
+===3. Protocol Service Overview===
+
+When two routers connect, their namespaces will merge as following to enable channels in one router to communicate to channels in the other router transparently:
+
+    * Ids merging from router2 to router1:
+
+          all ids in the intersection of router1's input interface (its set of recv ids with global / remote scope) and router2's output interface (its set of send ids with global / remote scope) 
+
+    * Ids merging from router1 to router2:
+
+          all ids in the intersection of router2's input interface (its set of recv ids with global / remote scope) and router1's output interface (its set of send ids with global / remote scope) 
+
+    * new ids are propagated automatically to connected routers according to its id / scope / membership.
+    * when routers are disconnected, routers' namespaces will be updated automatically so that all publications and subscriptions from remote routers will be removed. 
+
+To manage namespace changes, we can apply IdFilter and IdTranslator at Proxy for the following effects:
+
+    * IdFilter: allow only a specific set of Ids (and their messages) to pass thru a connection
+    * IdTranslator: relocate ids / messages from a connection to a "subspace" in local namespace 
