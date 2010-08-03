@@ -13,9 +13,9 @@ In "router" there are eight system ids:
         RouterDisconnId : message sent when one router actively disconnect from another
         ConnErrorId     : sent when one side detect any error, such as id type or chan type mismatch
         ConnReadyId	: notify initial name space merge complete
-        PubId		: send new publications (id and chan type info) to connected routers
+        PubId		: send new publications (set of <id, chan type info>) to connected routers
         UnPubId		: remove publications from connected routers
-        SubId		: send new subscriptions (id and chan type info) to connected routers
+        SubId		: send new subscriptions (set of <id, chan type info>) to connected routers
         UnSubId		: remove subscriptions from connected routers
 }}}
     user code can subscribe (attach recv chan to) to the above ids to learn system state changes and react accordingly 
@@ -48,9 +48,16 @@ To manage namespace changes, we can apply IdFilter and IdTranslator at Proxy for
     * IdFilter: allow only a specific set of Ids (and their messages) to pass thru a connection
     * IdTranslator: relocate ids / messages from a connection to a "subspace" in local namespace 
 
-===4. Protocol Transactions===
+===4. type-checking===
+   When channels are attached to / detached from ids in routers, and when routers are connected, the types of ids and chans are checked during runtime:
+   * type checking inside a single router
+      when attaching/detaching chans to ids in router, verify that id is of same type of router's id type, and if id is already inside router, verify added chan is of same type as chans already attached to this id
+   * type checking during router connection
+      when two routers are connected, verify they have the same id type; and if they have matching ids, verify matching ids have the same chan type in both routers.
 
-More details about specific transactions can be found in original doc. 
+===5. Protocol Transactions===
+
+More details about protocol transactions can be found in original doc. Here are some sample transactions translated in router's terminology: 
 
 router connection:
 	when two routers connect, they go thru the following steps:
@@ -61,3 +68,10 @@ router connection:
 	* if no error happens during the process, send ConnReadyId msg
 	* if any error, send ConnErrId msg, notify local name space and exit
 	* if receiving ConnErrMsg from peer, notify local name space and exit.
+
+publication of id:
+	when a sending channel "chan1" is attached to an "id1" in router(A) with global/remote scope:
+	* router(A) will send a PubId msg (containing <id1, chan1_type_info>) to all connected routers
+	* if router(B) recv this msg, it will check its local namespace; if there is a local subscription for "id1" with matched chan type; the following will happen:
+		* at router(B)'s proxy, a sending channel will be attached to router(B) with "id1" and (MemberRemote, ScopeLocal) which will forward msgs from router(A); a SubId msg with "id1" will be sent to router(A).
+		* at router(A)'s proxy, after recving SubId msg from router(B), a recv chan will be attached to router(A) with "id1" and (MemberRemote, ScopeLocal) which will forward msgs from local sending "chan1" to remote.
