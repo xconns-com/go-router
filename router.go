@@ -31,7 +31,6 @@ import (
 	"os"
 	"container/vector"
 	"io"
-	"sync"
 )
 
 //Default size settings in router
@@ -49,11 +48,10 @@ type Router interface {
 	//Attach chans to id in router, with an optional argument (chan *BindEvent)
 	//currently only accept the following chan types: chan bool/int/float/string/*struct
 	//When specified, the optional argument will serve two purposes:
-	//1. used to tell when the remote peers connecting/disconn
+	//1. used to tell when other ends connecting/disconn
 	//2. in AttachRecvChan, used as a flag to ask router to keep recv chan open when all senders close
-	//the returned Endpoint object can be used to find the number of bound peers: endp.NumBindings()
-	AttachSendChan(Id, interface{}, ...interface{}) (*Endpoint, os.Error)
-	AttachRecvChan(Id, interface{}, ...interface{}) (*Endpoint, os.Error)
+	AttachSendChan(Id, interface{}, ...interface{}) os.Error
+	AttachRecvChan(Id, interface{}, ...interface{}) os.Error
 
 	//Detach sendChan/recvChan from router
 	DetachChan(Id, interface{}) os.Error
@@ -83,6 +81,26 @@ type Router interface {
 	IdsForRecv(predicate func(id Id) bool) map[interface{}]*IdChanInfo
 }
 
+//The internal commands handled by router's main goroutine loop
+type commandType int
+
+const (
+	attach commandType = iota
+	detach
+	queryIdsForSend
+	queryIdsForRecv
+	addProxy
+	delProxy
+	shutdown
+)
+
+type command struct {
+	kind    commandType
+	data    interface{}
+	error   os.Error
+	rspChan chan *command //response channel
+}
+
 //Major data structures for router:
 //1. tblEntry: an entry for each id in router
 //2. routerImpl: main data struct of router
@@ -99,11 +117,10 @@ type routerImpl struct {
 	seedId         Id
 	idType         reflect.Type
 	matchType      MatchType
-	tblLock        sync.Mutex
 	routingTable   map[interface{}](*tblEntry)
+	cmdChan        chan *command
 	sysIds         [NumSysInternalIds]Id
 	notifier       *notifier
-	proxLock       sync.Mutex
 	proxies        *vector.Vector
 	//for log/debug, if name != nil, debug is enabled
 	Logger
@@ -128,9 +145,9 @@ func (s *routerImpl) SysID(indx int) Id {
 	return s.sysIds[indx]
 }
 
-func (s *routerImpl) IdsForSend(predicate func(id Id) bool) map[interface{}]*IdChanInfo {
+func (s *routerImpl) idsForSendImpl(cmd *command) {
+	predicate := cmd.data.(func(id Id) bool)
 	ids := make(map[interface{}]*IdChanInfo)
-	s.tblLock.Lock()
 	for _, v := range s.routingTable {
 		for _, e := range v.senders {
 			idx := s.getSysIdIdx(e.Id)
@@ -139,13 +156,14 @@ func (s *routerImpl) IdsForSend(predicate func(id Id) bool) map[interface{}]*IdC
 			}
 		}
 	}
-	s.tblLock.Unlock()
-	return ids
+	cmd.data = ids
+	cmd.rspChan <- cmd
+	return
 }
 
-func (s *routerImpl) IdsForRecv(predicate func(id Id) bool) map[interface{}]*IdChanInfo {
+func (s *routerImpl) idsForRecvImpl(cmd *command) {
+	predicate := cmd.data.(func(id Id) bool)
 	ids := make(map[interface{}]*IdChanInfo)
-	s.tblLock.Lock()
 	for _, v := range s.routingTable {
 		for _, e := range v.recvers {
 			idx := s.getSysIdIdx(e.Id)
@@ -154,8 +172,27 @@ func (s *routerImpl) IdsForRecv(predicate func(id Id) bool) map[interface{}]*IdC
 			}
 		}
 	}
-	s.tblLock.Unlock()
-	return ids
+	cmd.data = ids
+	cmd.rspChan <- cmd
+	return
+}
+
+func (s *routerImpl) IdsForSend(predicate func(id Id) bool) map[interface{}]*IdChanInfo {
+	cmd := &command{}
+	cmd.kind = queryIdsForSend
+	cmd.data = predicate
+	cmd.rspChan = make(chan *command)
+	s.cmdChan <- cmd
+	return (<-cmd.rspChan).data.(map[interface{}]*IdChanInfo)
+}
+
+func (s *routerImpl) IdsForRecv(predicate func(id Id) bool) map[interface{}]*IdChanInfo {
+	cmd := &command{}
+	cmd.kind = queryIdsForRecv
+	cmd.data = predicate
+	cmd.rspChan = make(chan *command)
+	s.cmdChan <- cmd
+	return (<-cmd.rspChan).data.(map[interface{}]*IdChanInfo)
 }
 
 func (s *routerImpl) validateId(id Id) (err os.Error) {
@@ -166,7 +203,7 @@ func (s *routerImpl) validateId(id Id) (err os.Error) {
 	return
 }
 
-func (s *routerImpl) validateChan(v interface{}) (ch *reflect.ChanValue, err os.Error) {
+func validateChan(v interface{}) (ch *reflect.ChanValue, err os.Error) {
 	ch, ok := reflect.NewValue(v).(*reflect.ChanValue)
 	if !ok {
 		err = os.ErrorString(errInvalidChan)
@@ -190,13 +227,13 @@ func (s *routerImpl) validateChan(v interface{}) (ch *reflect.ChanValue, err os.
 	return
 }
 
-func (s *routerImpl) AttachSendChan(id Id, v interface{}, args ...interface{}) (endp *Endpoint, err os.Error) {
+func (s *routerImpl) AttachSendChan(id Id, v interface{}, args ...interface{}) (err os.Error) {
 	if err = s.validateId(id); err != nil {
 		s.LogError(err)
 		s.Raise(err)
 		return
 	}
-	ch, err := s.validateChan(v)
+	ch, err := validateChan(v)
 	if err != nil {
 		s.LogError(err)
 		s.Raise(err)
@@ -221,62 +258,118 @@ func (s *routerImpl) AttachSendChan(id Id, v interface{}, args ...interface{}) (
 			return
 		}
 	}
-	endp = newEndpoint(id, senderType, ch, bindChan)
-	err = s.attach(endp)
-	if err != nil {
+	endp := newEndpoint(id, senderType, ch)
+	endp.bindChan = bindChan
+	cmd := &command{}
+	cmd.kind = attach
+	cmd.data = endp
+	cmd.rspChan = make(chan *command)
+	s.cmdChan <- cmd    //send attach cmd to router
+	cmd = <-cmd.rspChan //wait for response from router
+	if cmd.error != nil {
+		err = cmd.error
 		s.LogError(err)
 		s.Raise(err)
+		return
 	}
-	return
+	//now we are attached successfully, start forwarding
+	go func() {
+		cont := true
+		for cont {
+			v := ch.Recv()
+			if !ch.Closed() {
+				endp.Chan <- v.Interface()
+			} else {
+				cont = false
+			}
+		}
+		close(endp.Chan)
+	}()
+	return nil
 }
 
-func (s *routerImpl) AttachRecvChan(id Id, v interface{}, args ...interface{}) (endp *Endpoint, err os.Error) {
+func (s *routerImpl) AttachRecvChan(id Id, v interface{}, args ...interface{}) (err os.Error) {
 	if err = s.validateId(id); err != nil {
 		s.LogError(err)
 		s.Raise(err)
 		return
 	}
-	var ch reflectChanValue
-	gChan, ok := v.(*genericMsgChan)
-	if ok {
-		ch = gChan
-	} else {
-		ch, err = s.validateChan(v)
-		if err != nil {
-			s.LogError(err)
-			s.Raise(err)
-			return
-		}
+	ch, err := validateChan(v)
+	if err != nil {
+		s.LogError(err)
+		s.Raise(err)
+		return
 	}
 	l := len(args)
 	var bindChan chan *BindEvent
+	var ok, flag bool //a flag to mark if we close ext chan when EndOfData even if bindChan exist
 	if l > 0 {
-		switch cv := args[0].(type) {
-		case chan *BindEvent:
-			bindChan = cv
-			if cap(bindChan) == 0 {
-				err = os.ErrorString(errInvalidBindChan + ": binding bindChan is not buffered")
+		for i := 0; i < l; i++ {
+			switch cv := args[i].(type) {
+			case chan *BindEvent:
+				bindChan = cv
+				if cap(bindChan) == 0 {
+					err = os.ErrorString(errInvalidBindChan + ": binding bindChan is not buffered")
+					s.LogError(err)
+					s.Raise(err)
+					return
+				}
+			case bool:
+				flag = cv
+			default:
+				err = os.ErrorString("invalid arguments to attach recv chan")
 				s.LogError(err)
 				s.Raise(err)
 				return
 			}
-		default:
-			err = os.ErrorString("invalid arguments to attach recv chan")
-			s.LogError(err)
-			s.Raise(err)
-			return
 		}
 	}
-	endp = newEndpoint(id, recverType, ch, bindChan)
-	if gChan != nil {
-		endp.genFlag = true
-	}
-	err = s.attach(endp)
-	if err != nil {
+	endp := newEndpoint(id, recverType, ch)
+	endp.bindChan = bindChan
+	cmd := &command{}
+	cmd.kind = attach
+	cmd.data = endp
+	cmd.rspChan = make(chan *command)
+	s.cmdChan <- cmd    //send attach cmd to router
+	cmd = <-cmd.rspChan //wait for response from router
+	if cmd.error != nil {
+		err = cmd.error
 		s.LogError(err)
 		s.Raise(err)
+		return
 	}
-	return
+	//now we are attached successfully, start forwarding
+	go func() {
+		cont := true
+		for cont {
+			v := <-endp.Chan
+			if !closed(endp.Chan) {
+				if _, ok = v.(chanCloseMsg); ok {
+					if endp.bindChan != nil {
+						//if bindChan exist, user is monitoring bind status
+						//send EndOfData event and normally leave ext chan "ch" open
+						//only close it when flag is set
+						for !(endp.bindChan <- &BindEvent{EndOfData, 0}) {
+							<-endp.bindChan
+						}
+						if flag {
+							ch.Close()
+						}
+					} else {
+						//since no bindChan, user code is not monitoring bind status
+						//close ext chan to notify potential pending goroutine
+						ch.Close()
+					}
+				} else {
+					ch.Send(reflect.NewValue(v))
+				}
+			} else {
+				cont = false
+			}
+		}
+		ch.Close()
+	}()
+	return nil
 }
 
 func (s *routerImpl) DetachChan(id Id, v interface{}) (err os.Error) {
@@ -286,60 +379,96 @@ func (s *routerImpl) DetachChan(id Id, v interface{}) (err os.Error) {
 		s.Raise(err)
 		return
 	}
-	var ch reflectChanValue
-	gChan, ok := v.(*genericMsgChan)
-	if ok {
-		ch = gChan
-	} else {
-		ch, err = s.validateChan(v)
-		if err != nil {
-			s.LogError(err)
-			s.Raise(err)
-			return
-		}
+	cv, err := validateChan(v)
+	if err != nil {
+		s.LogError(err)
+		s.Raise(err)
+		return
 	}
 	endp := &Endpoint{}
 	endp.Id = id
-	endp.Chan = ch
-	err = s.detach(endp)
-	return
+	endp.extIntf = cv
+	cmd := &command{}
+	cmd.kind = detach
+	cmd.data = endp
+	cmd.rspChan = make(chan *command)
+	s.cmdChan <- cmd             //send close cmd to router
+	return (<-cmd.rspChan).error //wait for response from router
 }
 
 func (s *routerImpl) Close() {
 	s.Log(LOG_INFO, "Close()/shutdown called")
-	s.shutdown()
+	cmd := &command{}
+	cmd.kind = shutdown
+	cmd.rspChan = make(chan *command)
+	s.cmdChan <- cmd
+	<-cmd.rspChan //do we need to block wait?
 }
 
-func (s *routerImpl) attach(endp *Endpoint) (err os.Error) {
+//the main loop of router
+func (s *routerImpl) mainLoop() {
+	cont := true
+	for cont {
+		cmd := <-s.cmdChan
+		switch cmd.kind {
+		case attach:
+			s.attach(cmd)
+		case detach:
+			s.detach(cmd)
+		case queryIdsForSend:
+			s.idsForSendImpl(cmd)
+		case queryIdsForRecv:
+			s.idsForRecvImpl(cmd)
+		case addProxy:
+			s.addProxyImpl(cmd.data.(Proxy))
+			cmd.rspChan <- nil
+		case delProxy:
+			s.delProxyImpl(cmd.data.(Proxy))
+			cmd.rspChan <- nil
+		case shutdown:
+			s.shutdown()
+			cmd.rspChan <- nil //inform requester that we are done
+			cont = false
+			//drain cmdChan to unlock remaining commands
+			//close(s.cmdChan)
+			for {
+				cmd1, ok := <-s.cmdChan
+				if !ok {
+					break
+				}
+				cmd1.error = os.ErrorString("router closed")
+				cmd1.rspChan <- cmd1
+			}
+		}
+	}
+}
+
+func (s *routerImpl) attach(cmd *command) {
+	endp := cmd.data.(*Endpoint)
+
 	//handle id
 	if reflect.Typeof(endp.Id) != s.idType {
-		err = os.ErrorString(errIdTypeMismatch + ": " + endp.Id.String())
-		s.LogError(err)
+		cmd.error = os.ErrorString(errIdTypeMismatch + ": " + endp.Id.String())
+		s.LogError(cmd.error)
+		cmd.rspChan <- cmd
 		return
 	}
 
-	s.tblLock.Lock()
 	//router entry
 	ent, ok := s.routingTable[endp.Id.Key()]
 	if !ok {
-		if endp.genFlag {
-			err = os.ErrorString(fmt.Sprintf("%s %v", errChanGenericType, endp.Id))
-			s.LogError(err)
-			s.tblLock.Unlock()
-			return
-		}
 		//first endpoint attached to this id, add a router-entry for this id
 		ent = &tblEntry{}
 		s.routingTable[endp.Id.Key()] = ent
 		ent.id = endp.Id // will only use the Val/Match() part of id
-		ent.chanType = endp.Chan.Type().(*reflect.ChanType)
+		ent.chanType = endp.extIntf.Type().(*reflect.ChanType)
 		ent.senders = make(map[interface{}]*Endpoint)
 		ent.recvers = make(map[interface{}]*Endpoint)
 	} else {
-		if !endp.genFlag && endp.Chan.Type().(*reflect.ChanType) != ent.chanType {
-			err = os.ErrorString(fmt.Sprintf("%s %v", errChanTypeMismatch, endp.Id))
-			s.LogError(err)
-			s.tblLock.Unlock()
+		if endp.extIntf.Type().(*reflect.ChanType) != ent.chanType {
+			cmd.error = os.ErrorString(fmt.Sprintf("%s %v", errChanTypeMismatch, endp.Id))
+			s.LogError(cmd.error)
+			cmd.rspChan <- cmd
 			return
 		}
 	}
@@ -347,22 +476,22 @@ func (s *routerImpl) attach(endp *Endpoint) (err os.Error) {
 	//check for duplicate
 	switch endp.kind {
 	case senderType:
-		if _, ok = ent.senders[endp.Chan.Interface()]; ok {
-			err = os.ErrorString(errDupAttachment)
-			s.LogError(err)
-			s.tblLock.Unlock()
+		if _, ok := ent.senders[endp.extIntf.Interface()]; ok {
+			cmd.error = os.ErrorString(errDupAttachment)
+			s.LogError(cmd.error)
+			cmd.rspChan <- cmd
 			return
 		} else {
-			ent.senders[endp.Chan.Interface()] = endp
+			ent.senders[endp.extIntf.Interface()] = endp
 		}
 	case recverType:
-		if _, ok = ent.recvers[endp.Chan.Interface()]; ok {
-			err = os.ErrorString(errDupAttachment)
-			s.LogError(err)
-			s.tblLock.Unlock()
+		if _, ok := ent.recvers[endp.extIntf.Interface()]; ok {
+			cmd.error = os.ErrorString(errDupAttachment)
+			s.LogError(cmd.error)
+			cmd.rspChan <- cmd
 			return
 		} else {
-			ent.recvers[endp.Chan.Interface()] = endp
+			ent.recvers[endp.extIntf.Interface()] = endp
 		}
 	}
 
@@ -383,6 +512,9 @@ func (s *routerImpl) attach(endp *Endpoint) (err os.Error) {
 			for _, sender := range ent.senders {
 				if scope_match(sender.Id, endp.Id) {
 					s.Log(LOG_INFO, fmt.Sprintf("add bindings: %v -> %v", sender.Id, endp.Id))
+					if idx >= PubId && idx < NumSysIds && len(sender.bindings) == 0 { //sys Pub/Sub ids
+						s.notifier.setFlag(sender.Id, idx, true)
+					}
 					matches.Push(sender)
 				}
 			}
@@ -390,8 +522,7 @@ func (s *routerImpl) attach(endp *Endpoint) (err os.Error) {
 	} else { //for PrefixMatch & AssocMatch, need to iterate thru all entries in map routingTable
 		for _, ent2 := range s.routingTable {
 			if endp.Id.Match(ent2.id) {
-				if endp.Chan.Type().(*reflect.ChanType) == ent2.chanType ||
-					(endp.kind == recverType && endp.genFlag) {
+				if endp.extIntf.Type().(*reflect.ChanType) == ent2.chanType {
 					switch endp.kind {
 					case senderType:
 						for _, recver := range ent2.recvers {
@@ -403,6 +534,10 @@ func (s *routerImpl) attach(endp *Endpoint) (err os.Error) {
 					case recverType:
 						for _, sender := range ent2.senders {
 							if scope_match(sender.Id, endp.Id) {
+								if idx >= PubId && idx < NumSysIds && len(sender.bindings) == 0 { //sys Pub/Sub ids
+									//s.LogError("enable for ", sender.Id);
+									s.notifier.setFlag(sender.Id, idx, true)
+								}
 								s.Log(LOG_INFO, fmt.Sprintf("add bindings: %v -> %v", sender.Id, endp.Id))
 								matches.Push(sender)
 							}
@@ -418,8 +553,6 @@ func (s *routerImpl) attach(endp *Endpoint) (err os.Error) {
 		}
 	}
 
-	s.tblLock.Unlock()
-
 	//activate
 	//force broadcaster for system ids
 	if idx >= 0 { //sys ids
@@ -428,68 +561,79 @@ func (s *routerImpl) attach(endp *Endpoint) (err os.Error) {
 		endp.start(s.defChanBufSize, s.dispPolicy)
 	}
 
-	//finished updating routing table
-	//start updating endpoints's binding_set
-	for i := 0; i < matches.Len(); i++ {
-		peer := matches.At(i).(*Endpoint)
-		endp.attach(peer)
-		peer.attach(endp)
-	}
+	//finished updating routing table, spawn remaining work
+	//in another goroutine to avoid blocking router main goroutine
+	go func() {
+		//create a chan *command to allow router mainLoop to wait for all bindings of the new endpoint to set up
+		done := make(chan *command, DefCmdChanBufSize)
+		count := 0 //count how many outstanding
 
-	//notifier will send in a separate goroutine, so non-blocking here
-	if idx < 0 && endp.Id.Member() == MemberLocal { //not sys ids
-		switch endp.kind {
-		case senderType:
-			s.notifier.notifyPub(&IdChanInfo{Id: endp.Id, ChanType: endp.Chan.Type().(*reflect.ChanType)})
-		case recverType:
-			s.notifier.notifySub(&IdChanInfo{Id: endp.Id, ChanType: endp.Chan.Type().(*reflect.ChanType)})
+		for i := 0; i < matches.Len(); i++ {
+			peer := matches.At(i).(*Endpoint)
+			endp.attach(peer, done)
+			peer.attach(endp, done)
+			count += 2
 		}
-	}
-	return
+
+		//wait for all bindings to set up
+		count1 := count
+		for count > 0 {
+			<-done
+			count--
+		}
+		s.Log(LOG_INFO, fmt.Sprintf("router.attach all %v bindings for %v are done", count1, endp.Id))
+
+		//notifier will send in a separate goroutine, so non-blocking here
+		if idx < 0 && endp.Id.Member() == MemberLocal { //not sys ids
+			switch endp.kind {
+			case senderType:
+				s.notifier.notifyPub(&IdChanInfo{Id: endp.Id, ChanType: endp.extIntf.Type().(*reflect.ChanType)})
+			case recverType:
+				s.notifier.notifySub(&IdChanInfo{Id: endp.Id, ChanType: endp.extIntf.Type().(*reflect.ChanType)})
+			}
+		}
+
+		//release client
+		cmd.rspChan <- cmd
+	}()
 }
 
-func (s *routerImpl) detach(endp *Endpoint) (err os.Error) {
+func (s *routerImpl) detach(cmd *command) {
+	endp := cmd.data.(*Endpoint)
 	s.Log(LOG_INFO, fmt.Sprintf("detach chan from id %v\n", endp.Id))
 
 	//check id
 	if reflect.Typeof(endp.Id) != s.idType {
-		err = os.ErrorString(errIdTypeMismatch + ": " + endp.Id.String())
-		s.LogError(err)
+		cmd.error = os.ErrorString(errIdTypeMismatch + ": " + endp.Id.String())
+		s.LogError(cmd.error)
+		cmd.rspChan <- cmd
 		return
 	}
-
-	s.tblLock.Lock()
 
 	//find router entry
 	ent, ok := s.routingTable[endp.Id.Key()]
 	if !ok {
-		err = os.ErrorString(errDetachChanNotInRouter + ": " + endp.Id.String())
-		s.LogError(err)
-		s.tblLock.Unlock()
+		cmd.error = os.ErrorString(errDetachChanNotInRouter + ": " + endp.Id.String())
+		s.LogError(cmd.error)
+		cmd.rspChan <- cmd
 		return
 	}
 
 	//find the endpoint & remove it from tblEntry
-	endp1, ok := ent.senders[endp.Chan.Interface()]
+	endp1, ok := ent.senders[endp.extIntf.Interface()]
 	if ok {
-		ent.senders[endp.Chan.Interface()] = endp1, false
-	} else if endp1, ok = ent.recvers[endp.Chan.Interface()]; ok {
-		ent.recvers[endp.Chan.Interface()] = endp1, false
+		ent.senders[endp.extIntf.Interface()] = endp1, false
+	} else if endp1, ok = ent.recvers[endp.extIntf.Interface()]; ok {
+		ent.recvers[endp.extIntf.Interface()] = endp1, false
 	} else {
-		err = os.ErrorString(errDetachChanNotInRouter + ": " + endp.Id.String())
-		s.LogError(err)
-		s.tblLock.Unlock()
+		cmd.error = os.ErrorString(errDetachChanNotInRouter + ": " + endp.Id.String())
+		s.LogError(cmd.error)
+		cmd.rspChan <- cmd
 		return
 	}
 
-	s.tblLock.Unlock()
-
-	//remove bindings from peers. dup bindings to avoid race at shutdown
-	endp1.bindLock.Lock()
-	copySet := make([]*Endpoint, len(endp1.bindings))
-	copy(copySet, endp1.bindings)
-	endp1.bindLock.Unlock()
-	for _, v := range copySet {
+	//remove bindings from peers
+	for _, v := range endp1.bindings {
 		if endp1.kind == senderType {
 			s.Log(LOG_INFO, fmt.Sprintf("del bindings: %v -> %v", endp1.Id, v.Id))
 		} else {
@@ -499,29 +643,24 @@ func (s *routerImpl) detach(endp *Endpoint) (err os.Error) {
 	}
 
 	//close endpoint's chans, so any goroutines waiting on them will exit
-	endp1.close()
+	endp1.Close()
 
 	//notifier will send in a separate goroutine, so non-blocking here
 	idx := s.getSysIdIdx(endp1.Id)
 	if idx < 0 && endp.Id.Member() == MemberLocal { //not sys ids
 		switch endp.kind {
 		case senderType:
-			s.notifier.notifyUnPub(&IdChanInfo{Id: endp1.Id, ChanType: endp1.Chan.Type().(*reflect.ChanType)})
+			s.notifier.notifyUnPub(&IdChanInfo{Id: endp1.Id, ChanType: endp1.extIntf.Type().(*reflect.ChanType)})
 		case recverType:
-			s.notifier.notifyUnSub(&IdChanInfo{Id: endp1.Id, ChanType: endp1.Chan.Type().(*reflect.ChanType)})
+			s.notifier.notifyUnSub(&IdChanInfo{Id: endp1.Id, ChanType: endp1.extIntf.Type().(*reflect.ChanType)})
 		}
 	}
 
-	return
+	cmd.rspChan <- cmd
 }
 
 func (s *routerImpl) shutdown() {
 	s.Log(LOG_INFO, "shutdown start...")
-
-	s.tblLock.Lock()
-	defer s.tblLock.Unlock()
-	s.proxLock.Lock()
-	defer s.proxLock.Unlock()
 
 	// close all peers
 	for i := 0; i < s.proxies.Len(); i++ {
@@ -530,9 +669,9 @@ func (s *routerImpl) shutdown() {
 	s.Log(LOG_INFO, "all proxy closed")
 
 	//close all enndpoint send chans
-	for _, ent := range s.routingTable {
-		for _, sender := range ent.senders {
-			sender.close()
+	for _, ent2 := range s.routingTable {
+		for _, sender := range ent2.senders {
+			sender.Close()
 		}
 	}
 
@@ -541,9 +680,9 @@ func (s *routerImpl) shutdown() {
 	s.Logger.Close()
 	s.LogSink.Close()
 
-	for _, ent := range s.routingTable {
-		for _, recver := range ent.recvers {
-			recver.close()
+	for _, ent2 := range s.routingTable {
+		for _, recver := range ent2.recvers {
+			recver.Close()
 		}
 	}
 }
@@ -573,16 +712,32 @@ func (s *routerImpl) getSysInternalIdIdx(id Id) int {
 }
 
 func (s *routerImpl) addProxy(p Proxy) {
+	cmd := &command{}
+	cmd.kind = addProxy
+	cmd.data = p
+	cmd.rspChan = make(chan *command)
+	s.cmdChan <- cmd
+	<-cmd.rspChan
+}
+
+func (s *routerImpl) addProxyImpl(p Proxy) {
 	s.Log(LOG_INFO, "add proxy")
-	s.proxLock.Lock()
 	s.proxies.Push(p)
-	s.proxLock.Unlock()
 }
 
 func (s *routerImpl) delProxy(p Proxy) {
+	s.Log(LOG_INFO, "del proxy called")
+	cmd := &command{}
+	cmd.kind = delProxy
+	cmd.data = p
+	cmd.rspChan = make(chan *command)
+	s.cmdChan <- cmd
+	<-cmd.rspChan
+}
+
+func (s *routerImpl) delProxyImpl(p Proxy) {
 	s.Log(LOG_INFO, "del proxy impl")
 	num := -1
-	s.proxLock.Lock()
 	for i := 0; i < s.proxies.Len(); i++ {
 		if s.proxies.At(i).(Proxy) == p {
 			num = i
@@ -592,7 +747,6 @@ func (s *routerImpl) delProxy(p Proxy) {
 	if num >= 0 {
 		s.proxies.Delete(num)
 	}
-	s.proxLock.Unlock()
 }
 
 //Connect() connects this router to peer router, the real job is done inside Proxy
@@ -657,7 +811,9 @@ func New(seedId Id, bufSize int, disp DispatchPolicy, args ...interface{}) Route
 	}
 	router.dispPolicy = disp
 	router.routingTable = make(map[interface{}](*tblEntry))
+	router.cmdChan = make(chan *command, DefCmdChanBufSize)
 	router.proxies = new(vector.Vector)
+	go router.mainLoop()
 	router.notifier = newNotifier(router)
 	router.Logger.Init(router.SysID(RouterLogId), router, router.name)
 	if consoleLogScope >= ScopeGlobal && consoleLogScope <= ScopeLocal {

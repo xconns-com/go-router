@@ -14,12 +14,12 @@ import (
 )
 
 type stream struct {
-	peer peerIntf
-	outputChan chan *genericMsg
+	peerBase
+	myCmdChan chan peerCommand
 	//
-	rwc        io.ReadWriteCloser
-	mar        Marshaler
-	demar      Demarshaler
+	rwc   io.ReadWriteCloser
+	mar   Marshaler
+	demar Demarshaler
 	//
 	proxy *proxyImpl
 	//others
@@ -35,8 +35,12 @@ type stream struct {
 func newStream(rwc io.ReadWriteCloser, mp MarshalingPolicy, p *proxyImpl) *stream {
 	s := new(stream)
 	s.proxy = p
+	//create export chans
+	s.myCmdChan = make(chan peerCommand, DefCmdChanBufSize)
+	s.exportConnChan = make(chan *genericMsg, p.router.defChanBufSize)
+	s.exportPubSubChan = make(chan *genericMsg, p.router.defChanBufSize)
+	s.exportAppDataChan = make(chan *genericMsg, p.router.defChanBufSize)
 	//
-	s.outputChan = make(chan *genericMsg, s.proxy.router.defChanBufSize + DefCmdChanBufSize)
 	s.rwc = rwc
 	s.mar = mp.NewMarshaler(rwc)
 	s.demar = mp.NewDemarshaler(rwc)
@@ -70,18 +74,13 @@ func (s *stream) start() {
 
 func (s *stream) Close() {
 	s.Log(LOG_INFO, "Close() is called")
-	//shutdown outputMainLoop
-	close(s.outputChan) 
-	//notify peer
-	s.peer.sendCtrlMsg(&genericMsg{s.proxy.router.SysID(RouterDisconnId), &ConnInfoMsg{}})
+	s.myCmdChan <- peerClose
 }
 
 func (s *stream) closeImpl() {
 	if !s.Closed {
 		s.Log(LOG_INFO, "closeImpl called")
 		s.Closed = true
-		//shutdown outputMainLoop
-		close(s.outputChan) 
 		//shutdown inputMainLoop
 		s.rwc.Close()
 		//close logger
@@ -90,49 +89,81 @@ func (s *stream) closeImpl() {
 	}
 }
 
-func (s *stream) appMsgChanForId(id Id) (reflectChanValue, int) {
-	if s.proxy.translator != nil {
-		return &genericMsgChan{id, s.outputChan, func(id Id) Id { return s.proxy.translator.TranslateOutward(id) }, true}, 1
+func (s *stream) send(m *genericMsg, appMsg bool) (err os.Error) {
+	if appMsg {
+		_, ok := m.Data.(chanCloseMsg)
+		id := m.Id
+		if ok {
+			id, _ = m.Id.Clone(NumScope, NumMembership) //special id to mark chan close
+		}
+		if err = s.mar.Marshal(id); err != nil {
+			s.LogError(err)
+			//s.Raise(err)
+			return
+		}
+		if !ok {
+			if err := s.mar.Marshal(m.Data); err != nil {
+				s.LogError(err)
+				//s.Raise(err)
+				return
+			}
+		}
+	} else {
+		if err = s.mar.Marshal(m.Id); err != nil {
+			s.LogError(err)
+			//s.Raise(err)
+			return
+		}
+		if err := s.mar.Marshal(m.Data); err != nil {
+			s.LogError(err)
+			//s.Raise(err)
+			return
+		}
 	}
-	return &genericMsgChan{id, s.outputChan, nil, true}, 1
-}
-
-//send ctrl data to io.Writer
-func (s *stream) sendCtrlMsg(m *genericMsg) (err os.Error) {
-	s.outputChan <- m
-	if m.Id.Match(s.proxy.router.SysID(RouterDisconnId)) {
-		close(s.outputChan)
-	}
+	//s.Log(LOG_INFO, fmt.Sprintf("output send one msg for id %v", m.Id))
 	return
 }
 
+//read data from importConnChan/importPubSubChan/importAppDataChan and send them to io.Writer
 func (s *stream) outputMainLoop() {
 	s.Log(LOG_INFO, "outputMainLoop start")
 	//
-	var err os.Error
+	proxyDisconn := false
 	cont := true
 	for cont {
-		m := <-s.outputChan
-		if closed(s.outputChan) {
-			cont = false
-		} else {
-			if err = s.mar.Marshal(m.Id); err != nil {
-				s.LogError(err)
-				//s.Raise(err)
+		select {
+		case cmd := <-s.myCmdChan:
+			if cmd == peerClose {
 				cont = false
-			} else if !(m.Id.Scope() == NumScope && m.Id.Member() == NumMembership) {
-				if err = s.mar.Marshal(m.Data); err != nil {
-					s.LogError(err)
-					//s.Raise(err)
+			}
+		case m := <-s.importConnChan:
+			if !closed(s.importConnChan) {
+				if err := s.send(m, false); err != nil {
+					cont = false
+				}
+				if m.Id.Match(s.proxy.router.SysID(RouterDisconnId)) {
+					proxyDisconn = true
+					cont = false
+				}
+			}
+		case m := <-s.importPubSubChan:
+			if !closed(s.importPubSubChan) {
+				if err := s.send(m, false); err != nil {
+					cont = false
+				}
+			}
+		case m := <-s.importAppDataChan:
+			if !closed(s.importAppDataChan) {
+				if err := s.send(m, true); err != nil {
 					cont = false
 				}
 			}
 		}
 	}
-	if err != nil {
+	if !proxyDisconn {
 		//must be io conn fail or marshal fail
 		//notify proxy disconn
-		s.peer.sendCtrlMsg(&genericMsg{s.proxy.router.SysID(RouterDisconnId), &ConnInfoMsg{}})
+		s.exportConnChan <- &genericMsg{Id: s.proxy.router.SysID(RouterDisconnId), Data: &ConnInfoMsg{}}
 	}
 	s.closeImpl()
 	s.Log(LOG_INFO, "outputMainLoop exit")
@@ -149,8 +180,8 @@ func (s *stream) inputMainLoop() {
 	}
 	//when reach here, must be io conn fail or demarshal fail
 	//notify proxy disconn
-	s.peer.sendCtrlMsg(&genericMsg{s.proxy.router.SysID(RouterDisconnId), &ConnInfoMsg{}})
-	s.closeImpl() 
+	s.exportConnChan <- &genericMsg{Id: s.proxy.router.SysID(RouterDisconnId), Data: &ConnInfoMsg{}}
+	//s.closeImpl() only called from outputMainLoop
 	s.Log(LOG_INFO, "inputMainLoop exit")
 }
 
@@ -177,7 +208,7 @@ func (s *stream) recv() (err os.Error) {
 			//s.Raise(err)
 			return
 		}
-		s.peer.sendCtrlMsg(&genericMsg{id, cim})
+		s.exportConnChan <- &genericMsg{id, cim}
 	case id.Match(r.SysID(PubId)):
 		fallthrough
 	case id.Match(r.SysID(UnPubId)):
@@ -192,14 +223,10 @@ func (s *stream) recv() (err os.Error) {
 			//s.Raise(err)
 			return
 		}
-		s.peer.sendCtrlMsg(&genericMsg{id, icm})
+		s.exportPubSubChan <- &genericMsg{id, icm}
 	default: //appMsg
 		if id.Scope() == NumScope && id.Member() == NumMembership { //chan is closed
-			peerChan, _ := s.peer.appMsgChanForId(id)
-			if peerChan != nil {
-				peerChan.Close()
-				s.Log(LOG_INFO, fmt.Sprintf("close proxy forwarding chan for %v", id))
-			}
+			s.exportAppDataChan <- &genericMsg{id, chanCloseMsg{}}
 		} else {
 			chanType := s.proxy.getExportRecvChanType(id)
 			if chanType == nil {
@@ -239,11 +266,7 @@ func (s *stream) recv() (err os.Error) {
 				//s.Raise(err)
 				return
 			}
-			peerChan, num := s.peer.appMsgChanForId(id)
-			if peerChan != nil && num > 0 {
-				peerChan.Send(val)
-				//s.Log(LOG_INFO, fmt.Sprintf("send appMsg for %v", id))
-			}
+			s.exportAppDataChan <- &genericMsg{id, val.Interface()}
 		}
 	}
 	//s.Log(LOG_INFO, fmt.Sprintf("input recv one msg for id %v", id))
