@@ -56,18 +56,27 @@ func (dt *DbTask) Run(r router.Router, sn string, role ServantRole) {
 	//mainloop
 	cont := true
 	for cont {
-		select {
-		case cmd := <-dt.sysCmdChan:
+		if dt.role == Standby {
+			cmd := <-dt.sysCmdChan
 			if !closed(dt.sysCmdChan) {
 				cont = dt.handleCmd(cmd)
 			} else {
 				cont = false
 			}
-		case req := <-dt.dbReqChan:
-			if !closed(dt.dbReqChan) {
-				dt.handleDbReq(req)
-			} else {
-				cont = false
+		} else {
+			select {
+			case cmd := <-dt.sysCmdChan:
+				if !closed(dt.sysCmdChan) {
+					cont = dt.handleCmd(cmd)
+				} else {
+					cont = false
+				}
+			case req := <-dt.dbReqChan:
+				if !closed(dt.dbReqChan) {
+					dt.handleDbReq(req)
+				} else {
+					cont = false
+				}
 			}
 		}
 	}
@@ -144,19 +153,15 @@ func (dt *DbTask) handleDbReq(req *DbReq) {
 	fmt.Println("DbTask at [", dt.servName, "] handles req from : ", req.srcName)
 	ch, ok := dt.dbRespChans[req.srcName]
 	if ok {
-		if dt.role == Active {
-			ch <- fmt.Sprintf("DbReq from [%s] is processed : db_transaction_id [%d]", req.srcName, dt.numTrans)
-			dt.numTrans++
-			//fake random fault report
-			if dt.numTrans > 3 {
-				r := dt.random.Intn(1024)
-				if r == 31 {
-					fmt.Println("DbTask at [", dt.servName, "] report fault")
-					dt.Raise(os.ErrorString("DbTask got an error"))
-				}
+		ch <- fmt.Sprintf("DbReq from [%s] is processed : db_transaction_id [%d]", req.srcName, dt.numTrans)
+		dt.numTrans++
+		//fake random fault report
+		if dt.numTrans > 3 {
+			r := dt.random.Intn(128)
+			if r == 31 {
+				fmt.Println("DbTask at [", dt.servName, "] report fault")
+				dt.Raise(os.ErrorString("DbTask got an error"))
 			}
-		} else {  //return empty string "" telling client we are standby
-			ch <- ""
 		}
 	}
 }

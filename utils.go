@@ -30,9 +30,7 @@ func (r *recverInBundle) mainLoop() {
 		v := r.ch.Recv()
 		if r.ch.Closed() {
 			r.bundle.router.Log(LOG_INFO, fmt.Sprintf("close proxy chan for %v", r.id))
-			if !r.bundle.dropChanCloseMsg {
-				r.bundle.OutChan <- &genericMsg{Id: r.id, Data: chanCloseMsg{}}
-			}
+			r.bundle.OutChan <- &genericMsg{Id: r.id, Data: chanCloseMsg{}}
 			break
 		}
 		r.bundle.OutChan <- &genericMsg{Id: r.id, Data: v.Interface()}
@@ -42,14 +40,13 @@ func (r *recverInBundle) mainLoop() {
 }
 
 type recvChanBundle struct {
-	router           *routerImpl
-	scope            int
-	member           int
-	recvChans        map[interface{}]*recverInBundle
-	OutChan          chan *genericMsg
-	ownOutChan       bool
-	started          bool
-	dropChanCloseMsg bool
+	router     *routerImpl
+	scope      int
+	member     int
+	recvChans  map[interface{}]*recverInBundle
+	OutChan    chan *genericMsg
+	ownOutChan bool
+	started    bool
 }
 
 func newRecvChanBundle(r Router, s int, m int, mc chan *genericMsg) *recvChanBundle {
@@ -70,7 +67,10 @@ func newRecvChanBundle(r Router, s int, m int, mc chan *genericMsg) *recvChanBun
 
 func (rcb *recvChanBundle) RecverExist(id Id) bool {
 	_, ok := rcb.recvChans[id.Key()]
-	return ok
+	if ok {
+		return true
+	}
+	return false
 }
 
 func (rcb *recvChanBundle) AllRecverInfo() []*IdChanInfo {
@@ -93,7 +93,7 @@ func (rcb *recvChanBundle) BindingCount(id Id) int {
 	}
 	for {
 		bv, ok := <-s.bindChan
-		if !ok || closed(s.bindChan) {
+		if !ok {
 			break
 		}
 		s.numBindings = bv.Count
@@ -110,11 +110,7 @@ func (rcb *recvChanBundle) AddRecver(id Id, chanType *reflect.ChanType) os.Error
 	r.bundle = rcb
 	r.id, _ = id.Clone(rcb.scope, rcb.member)
 	rt := rcb.router
-	buflen := rt.defChanBufSize
-	if rt.getSysIdIdx(id) >= 0 {
-		buflen = DefCmdChanBufSize
-	}
-	r.ch = reflect.MakeChan(chanType, buflen)
+	r.ch = reflect.MakeChan(chanType, rt.defChanBufSize)
 	r.bindChan = make(chan *BindEvent, 1)
 	err := rt.AttachRecvChan(r.id, r.ch.Interface(), r.bindChan, true)
 	if err != nil {
@@ -133,12 +129,12 @@ func (rcb *recvChanBundle) DelRecver(id Id) os.Error {
 	if !ok {
 		return os.ErrorString("router recvChanBundle: DelRecver id doesnt exist")
 	}
-	rcb.recvChans[id.Key()] = r, false
 	err := rcb.router.DetachChan(r.id, r.ch.Interface())
 	if err != nil {
 		rcb.router.LogError(err)
 	}
 	r.Close()
+	rcb.recvChans[id.Key()] = r, false
 	return nil
 }
 
@@ -193,15 +189,16 @@ func newSendChanBundle(r Router, s int, m int) *sendChanBundle {
 
 //the following 2 methods are called from the same goroutine which call Add/DelSender()
 func (scb *sendChanBundle) SenderExist(id Id) bool {
-	scb.Lock() //!no need for lock, since add/delSender and SenderExist all from same proxy ctrlMainLoop
+	//scb.Lock() !no need for lock, since add/delSender and SenderExist all from same proxy ctrlMainLoop
 	_, ok := scb.sendChans[id.Key()]
-	scb.Unlock()
-	return ok
+	//scb.Unlock()
+	if ok {
+		return true
+	}
+	return false
 }
 
 func (scb *sendChanBundle) AllSenderInfo() []*IdChanInfo {
-	scb.Lock()
-	defer scb.Unlock()
 	info := make([]*IdChanInfo, len(scb.sendChans))
 	num := 0
 	for _, v := range scb.sendChans {
@@ -215,19 +212,13 @@ func (scb *sendChanBundle) AllSenderInfo() []*IdChanInfo {
 }
 
 func (scb *sendChanBundle) BindingCount(id Id) int {
-	scb.Lock()
 	s, ok := scb.sendChans[id.Key()]
-	scb.Unlock()
 	if !ok {
 		return -1
 	}
-	return s.bindingCount()
-}
-
-func (s *senderInBundle) bindingCount() int {
 	for {
 		bv, ok := <-s.bindChan
-		if !ok || closed(s.bindChan) {
+		if !ok {
 			break
 		}
 		s.numBindings = bv.Count
@@ -236,20 +227,15 @@ func (s *senderInBundle) bindingCount() int {
 }
 
 func (scb *sendChanBundle) AddSender(id Id, chanType *reflect.ChanType) os.Error {
-	scb.Lock()
+	scb.router.Log(LOG_INFO, fmt.Sprintf("start 2..add sender for %v", id))
 	_, ok := scb.sendChans[id.Key()]
-	scb.Unlock()
 	if ok {
 		return os.ErrorString("router sendChanBundle: AddSender duplicated id")
 	}
 	s := new(senderInBundle)
 	s.id, _ = id.Clone(scb.scope, scb.member)
 	rt := scb.router
-	buflen := rt.defChanBufSize
-	if rt.getSysIdIdx(id) >= 0 {
-		buflen = DefCmdChanBufSize
-	}
-	s.ch = reflect.MakeChan(chanType, buflen)
+	s.ch = reflect.MakeChan(chanType, rt.defChanBufSize)
 	s.bindChan = make(chan *BindEvent, 1)
 	err := rt.AttachSendChan(s.id, s.ch.Interface(), s.bindChan)
 	if err != nil {
@@ -263,34 +249,32 @@ func (scb *sendChanBundle) AddSender(id Id, chanType *reflect.ChanType) os.Error
 }
 
 func (scb *sendChanBundle) DelSender(id Id) os.Error {
-	scb.Lock()
 	s, ok := scb.sendChans[id.Key()]
-	if ok {
-		scb.sendChans[id.Key()] = s, false
-	}
-	scb.Unlock()
 	if !ok {
 		return os.ErrorString("router sendChanBundle: DelSender id doesnt exist")
 	}
+	scb.Lock()
+	scb.sendChans[id.Key()] = s, false
+	scb.Unlock()
+	s.ch.Close()
 	err := scb.router.DetachChan(s.id, s.ch.Interface())
 	if err != nil {
 		scb.router.LogError(err)
 	}
-	s.ch.Close()
 	return nil
 }
 
 func (scb *sendChanBundle) Close() {
-	scb.Lock()
 	for k, s := range scb.sendChans {
-		scb.sendChans[k] = s, false
+		s.ch.Close()
 		err := scb.router.DetachChan(s.id, s.ch.Interface())
 		if err != nil {
 			scb.router.LogError(err)
 		}
-		s.ch.Close()
+		scb.Lock()
+		scb.sendChans[k] = s, false
+		scb.Unlock()
 	}
-	scb.Unlock()
 }
 
 func (scb *sendChanBundle) Send(id Id, data interface{}) os.Error {
@@ -303,13 +287,10 @@ func (scb *sendChanBundle) Send(id Id, data interface{}) os.Error {
 	}
 	if _, ok1 := data.(chanCloseMsg); ok1 {
 		s.ch.Close()
-		scb.router.Log(LOG_INFO, fmt.Sprintf("close proxy forwarding chan for %v", s.id))
+		scb.router.Log(LOG_INFO, fmt.Sprintf("close proxy forwarding chan for %v", id))
 	} else {
-		nb := s.bindingCount()
-		if nb > 0 {
-			s.ch.Send(reflect.NewValue(data))
-			//scb.router.Log(LOG_INFO, fmt.Sprintf("send appMsg for %v", s.id))
-		}
+		s.ch.Send(reflect.NewValue(data))
+		scb.router.Log(LOG_INFO, fmt.Sprintf("send appMsg for %v", id))
 	}
 	return nil
 }

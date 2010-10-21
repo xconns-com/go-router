@@ -185,19 +185,15 @@ func (at *ServiceTask) handleSvcReq(req string) {
 	r := at.random.Intn(6)
 	if r == 1 {
 		at.dbReqChan <- &DbReq{at.name, "give me data"}
-		dbResp := <-at.dbRespChan
-		if len(dbResp) == 0 {
-			fmt.Println("App Service [", at.name, "] at [", at.servantName, "] standby and failed req: ", req)
-			return
-		}
+		<-at.dbRespChan
 	}
 	//send response
 	at.svcRespChan <- fmt.Sprintf("[%s] is processed at [%s] : transaction_id [%d]", req, at.servantName, at.numTrans)
 	at.numTrans++
 	//fake random fault report
 	if at.numTrans > 3 {
-		r = at.random.Intn(1024)
-		if r == 99 {
+		r = at.random.Intn(6)
+		if r == 5 {
 			at.Raise(os.ErrorString("app service got an error"))
 		}
 	}

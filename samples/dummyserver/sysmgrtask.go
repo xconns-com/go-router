@@ -75,63 +75,97 @@ func (smt *SysMgrTask) Run(r router.Router, n string, role ServantRole) {
 	fmt.Println("SysMgrTask [", n, "] starts mainloop")
 	cont := true
 	for cont {
-		select {
-		case _ = <-smt.startChan:
-			//at standby servant, SysMgrTask will monitor heartbeats
-			//active servant stopped, change my role to active
-			smt.role = Active
-			//drain remaining out-of-date OOS msgs
-			_, ok := <-smt.sysOOSChan
-			for ok {
-				_, ok = <-smt.sysOOSChan
+		if smt.role == Standby {
+			//at standby servant, SysMgrTask will monitor heartbeats and client conn/disconn
+			select {
+			case _ = <-smt.startChan:
+				//active servant stopped, change my role to active
+				smt.role = Active
+				//drain remaining out-of-date OOS msgs
+				_, ok := <-smt.sysOOSChan
+				for ok {
+					_, ok = <-smt.sysOOSChan
+				}
+				//ask all child tasks coming up to service
+				smt.sysCmdChan <- "Start"
+				//start sending heartbeat to standby
+				go smt.sendHeartbeat()
+				fmt.Println("!!!! Servant [", smt.name, "] come up in service ...")
+			case pub := <-smt.pubChan:
+				if !closed(smt.pubChan) {
+					for _, v := range pub.Info {
+						id := v.Id.(*router.StrId)
+						data := strings.Split(id.Val, "/", 0)
+						if data[1] == "App" {
+							smt.sysCmdChan <- fmt.Sprintf("AddService:%s", data[2])
+							fmt.Printf("%s AddService:%s\n", smt.name, data[2])
+							NewServiceTask(smt.rot, smt.name, data[2], smt.role)
+						}
+					}
+				} else {
+					fmt.Println("error: pubChan closed")
+					cont = false
+				}
+			case unpub := <-smt.unpubChan:
+				if !closed(smt.unpubChan) {
+					for _, v := range unpub.Info {
+						id := v.Id.(*router.StrId)
+						data := strings.Split(id.Val, "/", 0)
+						if data[1] == "App" {
+							smt.sysCmdChan <- fmt.Sprintf("DelService:%s", data[2])
+							fmt.Printf("%s DelService:%s\n", smt.name, data[2])
+						}
+					}
+				} else {
+					fmt.Println("error: unpubChan closed")
+					cont = false
+				}
 			}
-			//ask all child tasks coming up to service
-			smt.sysCmdChan <- "Start"
-			//start sending heartbeat to standby
-			go smt.sendHeartbeat()
-			fmt.Println("!!!! Servant [", smt.name, "] come up in service ...")
-		case _ = <-smt.sysOOSChan:
+		} else {
 			//at active servant, per request from FaultMgrTask, SysMgrTask can put the servant
 			//out of service by stopping heartbeating and asking subordinate tasks to stop
-			if !closed(smt.sysOOSChan) {
-				smt.role = Standby
-				smt.stopHeartbeat() //1 second later, standby will come up
-				fmt.Println("xxxx Servant [", smt.name, "] will take a break and standby ...")
-				//start monitoring heartbeats from active servant
-				go smt.monitorActiveHeartbeat()
-				smt.sysCmdChan <- "Stop" //?move into monitorActiveHeartbeat() wait for active coming up
-			} else {
-				fmt.Println("error: OOS chan closed")
-				cont = false
-			}
-		case pub := <-smt.pubChan:
-			if !closed(smt.pubChan) {
-				for _, v := range pub.Info {
-					id := v.Id.(*router.StrId)
-					data := strings.Split(id.Val, "/", -1)
-					if data[1] == "App" {
-						smt.sysCmdChan <- fmt.Sprintf("AddService:%s", data[2])
-						fmt.Printf("%s AddService:%s\n", smt.name, data[2])
-						NewServiceTask(smt.rot, smt.name, data[2], smt.role)
-					}
+			select {
+			case _ = <-smt.sysOOSChan:
+				if !closed(smt.sysOOSChan) {
+					smt.role = Standby
+					smt.stopHeartbeat() //1 second later, standby will come up
+					fmt.Println("xxxx Servant [", smt.name, "] will take a break and standby ...")
+					//start monitoring heartbeats from active servant
+					go smt.monitorActiveHeartbeat()
+					smt.sysCmdChan <- "Stop" //?move into monitorActiveHeartbeat() wait for active coming up
+				} else {
+					fmt.Println("error: OOS chan closed")
+					cont = false
 				}
-			} else {
-				fmt.Println("error: pubChan closed")
-				cont = false
-			}
-		case unpub := <-smt.unpubChan:
-			if !closed(smt.unpubChan) {
-				for _, v := range unpub.Info {
-					id := v.Id.(*router.StrId)
-					data := strings.Split(id.Val, "/", -1)
-					if data[1] == "App" {
-						smt.sysCmdChan <- fmt.Sprintf("DelService:%s", data[2])
-						fmt.Printf("%s DelService:%s\n", smt.name, data[2])
+			case pub := <-smt.pubChan:
+				if !closed(smt.pubChan) {
+					for _, v := range pub.Info {
+						id := v.Id.(*router.StrId)
+						data := strings.Split(id.Val, "/", 0)
+						if data[1] == "App" {
+							smt.sysCmdChan <- fmt.Sprintf("AddService:%s", data[2])
+							fmt.Printf("%s AddService:%s\n", smt.name, data[2])
+							NewServiceTask(smt.rot, smt.name, data[2], smt.role)
+						}
 					}
+				} else {
+					fmt.Println("error: pubChan closed")
+					cont = false
 				}
-			} else {
-				fmt.Println("error: unpubChan closed")
-				cont = false
+			case unpub := <-smt.unpubChan:
+				if !closed(smt.unpubChan) {
+					for _, v := range unpub.Info {
+						id := v.Id.(*router.StrId)
+						data := strings.Split(id.Val, "/", 0)
+						if data[1] == "App" {
+							smt.sysCmdChan <- fmt.Sprintf("DelService:%s", data[2])
+							fmt.Printf("%s DelService:%s\n", smt.name, data[2])
+						}
+					}
+				} else {
+					fmt.Println("error: unpubChan closed")
+					cont = false
+				}
 			}
 		}
 	}
@@ -221,7 +255,7 @@ func (smt *SysMgrTask) sendHeartbeat() {
 		}
 		//send heartbeat in non-blocking way
 		for !(smt.htbtSendChan <- time.LocalTime()) {
-			_, _ = <-smt.htbtSendChan
+			<-smt.htbtSendChan
 		}
 		time.Sleep(2e8)
 	}

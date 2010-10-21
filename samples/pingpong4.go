@@ -9,8 +9,6 @@ import (
 	"os"
 )
 
-var showPingPong bool = true
-
 //Msg instances are bounced between Pinger and Ponger as balls
 type Msg struct {
 	Data string
@@ -29,9 +27,7 @@ type Pinger struct {
 
 func (p *Pinger) Run() {
 	for v := range p.pongChan {
-		if showPingPong {
-			fmt.Println("Pinger recv: ", v)
-		}
+		fmt.Println("Pinger recv: ", v)
 		if v.Count > p.numRuns {
 			break
 		}
@@ -64,9 +60,7 @@ type Ponger struct {
 func (p *Ponger) Run() {
 	p.pongChan <- &Msg{"hello from Ponger", 0}  //initiate ping-pong
 	for v := range p.pingChan {
-		if showPingPong {
-			fmt.Println("Ponger recv: ", v)
-		}
+		fmt.Println("Ponger recv: ", v)
 		p.pongChan <- &Msg{"hello from Ponger", v.Count+1}
 	}
 	close(p.pongChan)
@@ -94,10 +88,8 @@ func newPonger(rot router.Router, done chan<- bool) {
 func main() {
 	flag.Parse()
 	if flag.NArg() < 1 {
-		fmt.Println("Usage: pingpong4 num_runs hideTrace")
+		fmt.Println("Usage: pingpong3 num_runs")
 		return
-	} else if flag.NArg() > 1 {
-		showPingPong = false
 	}
 	numRuns, _ := strconv.Atoi(flag.Arg(0))
 	done := make(chan bool)

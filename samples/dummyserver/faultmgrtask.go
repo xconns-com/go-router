@@ -53,20 +53,27 @@ func (ft *FaultMgrTask) Run(r router.Router, sn string, role ServantRole) {
 	//mainloop
 	cont := true
 	for cont {
-		select {
-		case cmd := <-ft.sysCmdChan:
+		if ft.role == Standby {
+			cmd := <-ft.sysCmdChan
 			if !closed(ft.sysCmdChan) {
 				cont = ft.handleCmd(cmd)
 			} else {
 				cont = false
 			}
-		case rep := <-ft.faultReportChan:
-			if !closed(ft.faultReportChan) {
-				if ft.role == Active {  //only handle fault in active mode
-					ft.handleFaultReport(rep)
+		} else {
+			select {
+			case cmd := <-ft.sysCmdChan:
+				if !closed(ft.sysCmdChan) {
+					cont = ft.handleCmd(cmd)
+				} else {
+					cont = false
 				}
-			} else {
-				cont = false
+			case rep := <-ft.faultReportChan:
+				if !closed(ft.faultReportChan) {
+					ft.handleFaultReport(rep)
+				} else {
+					cont = false
+				}
 			}
 		}
 	}
