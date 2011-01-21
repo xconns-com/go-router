@@ -24,33 +24,46 @@ type Router interface {
 	//When specified, the optional argument will serve two purposes:
 	//1. used to tell when the remote peers connecting/disconn
 	//2. in AttachRecvChan, used as a flag to ask router to keep recv chan open when all senders close
-	//the returned Endpoint object can be used to find the number of bound peers: endp.NumBindings()
-	AttachSendChan(Id, interface{}, ...) (*Endpoint, os.Error)
-	AttachRecvChan(Id, interface{}, ...) (*Endpoint, os.Error)
+	//the returned RoutedChan object can be used to find the number of bound peers: routCh.NumPeers()
+	AttachSendChan(Id, interface{}, ...interface{}) (*RoutedChan, os.Error)
+	//3. When attaching recv chans, an optional integer can specify the internal buffering size
+	AttachRecvChan(Id, interface{}, ...interface{}) (*RoutedChan, os.Error)
 
-	//detach sendChan/recvChan from router
+	//Detach sendChan/recvChan from router
 	DetachChan(Id, interface{}) os.Error
 
-	//shutdown
+	//Shutdown router
 	Close()
 
-	//connect to another router
-        //local direct conn
-	Connect(Router) (Proxy, Proxy, os.Error)
-        //remote conn thru io interface
-	ConnectRemote(io.ReadWriteCloser, MarshallingPolicy) (Proxy, os.Error)
+	//Connect this router to another router.
+	//1. internally it calls Proxy.Connect(...) to do the real job
+	//2. The connection can be disconnected by calling Proxy.Close() on returned proxy object
+	//3. for more compilcated connection setup (such as setting IdFilter and IdTranslator), use Proxy.Connect() instead
 
-	//--- utils ---
-	//return pre-allocated sys ids 
+	//Connect to a local router
+	Connect(Router) (Proxy, Proxy, os.Error)
+
+	//Connect to a remote router thru io conn
+	//1. io.ReadWriteCloser: transport connection
+	//2. MarshalingPolicy: gob or json marshaling
+	//3. bool flag: turn on flow control on connection
+	ConnectRemote(io.ReadWriteCloser, MarshalingPolicy, ...bool) (Proxy, os.Error)
+
+	//--- other utils ---
+	//return pre-created SysIds according to the router's id-type, with ScopeGlobal / MemberLocal
 	SysID(idx int) Id
-	//query all ids and their ChanTypes from router's namespace which satisfy predicate
+
+	//create a new SysId with "args..." specifying scope/membership
+	NewSysID(idx int, args ...int) Id
+
+	//return all ids and their ChanTypes from router's namespace which satisfy predicate
 	IdsForSend(predicate func(id Id) bool) map[interface{}]*IdChanInfo
 	IdsForRecv(predicate func(id Id) bool) map[interface{}]*IdChanInfo
 }
 
 func router.New(seedId Id, bufSize int, disp DispatchPolicy, args ...) Router
 }}}
-Here is a sample showing various usage: http://code.google.com/p/go-router/source/browse/trunk/samples/test_router.go
+Here is a sample showing various usage: http://code.google.com/p/go-router/source/browse/trunk/samples/test.go
 ===3. Id===
    Each id contains three pieces of data:
       * Val - used as key in routing
@@ -78,7 +91,6 @@ Here is a sample showing various usage: http://code.google.com/p/go-router/sourc
    rot := router.New(SeedId, chanBufSize, dispatchPolicy, ...)
 }}}
    dispatchPolicy defines how the values from a send chan are dispatched to its bound recv chans. Three simple dispatchers can be used now: broadcast/round-robin/random.
-   need more work here.
 
 ===5. type-checking===
    When making changes to router's namespace (Attach/Detach/Connect), the types of ids and chans are checked during runtime
@@ -90,10 +102,10 @@ Here is a sample showing various usage: http://code.google.com/p/go-router/sourc
 ===6. system ids and system services===
    there are eight system ids:
 {{{
-        RouterConnId
-	RouterDisconnId
-	ConnErrorId
-	ConnReadyId
+        ConnId
+	DisconnId
+	ErrorId
+	ReadyId
 	PubId
 	UnPubId
 	SubId
@@ -107,7 +119,7 @@ Here is a sample showing various usage: http://code.google.com/p/go-router/sourc
       user code can call `router.IdsForSend(predicate)/IdsForRecv(predicate)` to get a snapshot of current router namespace
       
    * connection monitoring
-      user code can track the connection status of its router to remote routers by subscribing `(attach recv [chan ConnInfoMsg])` to these four system ids: RouterConnId/RouterDisconnId/ConnErrorId/ConnReadyId
+      user code can track the connection status of its router to remote routers by subscribing `(attach recv [chan ConnInfoMsg])` to these four system ids: ConnId/DisconnId/ErrorId/ReadyId
 
    * logging and Logger
       * besides the above eight core system ids, there are two other ids: RouterLogId and RouterFaultId. They are normal ids and are predefined so that we can have logging and fault-reporting for router's internal implementation. Applications can define their own ids for app specific logging and fault reporting
