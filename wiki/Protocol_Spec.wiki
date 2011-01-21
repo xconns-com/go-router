@@ -3,16 +3,16 @@ The connection between routers uses a similar protocol as another project: *Chan
 
 The original protocol spec is here: http://channel.sourceforge.net/boost_channel/libs/channel/doc/protocol.html. To read from the context of go-router, we need to do some terminology conversions, such as Channel to router, Names to Ids, Interface to Proxies, etc.
 
-Current implementations of router1/router2 since Febrary have been briefly described in Tutorial and UserGuide wikis, and reiterated here.
+Current implementations of router1/router2 since February, 2010 have been briefly described in Tutorial and UserGuide wikis, and reiterated here.
 
 ===2. System Message Ids===
 
 In "router" there are eight system ids:
 {{{
-        RouterConnId	: the first message sent between routers, containing router's id type to check if two connected routers have same id type
-        RouterDisconnId : message sent when one router actively disconnect from another
-        ConnErrorId     : sent when one side detect any error, such as id type or chan type mismatch
-        ConnReadyId	: notify initial name space merge complete
+        ConnId	: the first message sent between routers, containing some type checking info (router's id type and router's type (async/flow control/...)
+        DisconnId : message sent when one router actively disconnect from another
+        ErrorId     : sent when one side detect any error, such as id type or chan type mismatch
+        ReadyId	: sent when channels are ready to deliver app messages, such as initial name space merge complete or more receive buffer available
         PubId		: send new publications (set of <id, chan type info>) to connected routers
         UnPubId		: remove publications from connected routers
         SubId		: send new subscriptions (set of <id, chan type info>) to connected routers
@@ -26,7 +26,7 @@ In "router" there are eight system ids:
 
     * connection monitoring
 
-          user code can track the connection status of its router to remote routers by subscribing to these four system ids: RouterConnId/RouterDisconnId/ConnErrorId/ConnReadyId.
+          user code can track the connection status of its router to remote routers by subscribing to these four system ids: ConnId/DisconnId/ErrorId/ReadyId.
 
 ===3. Protocol Service Overview===
 
@@ -61,13 +61,13 @@ More details about protocol transactions can be found in original doc. Here are 
 
 router connection:
 	when two routers connect, they go thru the following steps:
-	* send RouterConnId (with id type) msg to each other
-	* recv peer's RouterConnId and check if having same id type, if not, returning a ConnErrId msg, and report to local name space connection error
+	* send ConnId (with id type) msg to each other
+	* recv peer's ConnId and check if having same id type, if not, returning a ErrId msg, and report to local name space connection error
 	* send its current global publications/subscriptions to peer, using PubId/SubId msgs
 	* recv inital PubId/SubId msgs from peer and merge it with local name space; and check matched channels to see if their types match; if not, send ConnErrMsg.
-	* if no error happens during the process, send ConnReadyId msg
-	* if any error, send ConnErrId msg, notify local name space and exit
-	* if receiving ConnErrMsg from peer, notify local name space and exit.
+	* if no error happens during the process, send ReadyId msg
+	* if any error, send ErrId msg, notify local name space and exit
+	* if receiving ErrMsg from peer, notify local name space and exit.
 
 publication of id:
 	when a sending channel "chan1" is attached to an "id1" in router(A) with global/remote scope:
