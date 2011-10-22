@@ -56,28 +56,38 @@ func NewServiceTask(r router.Router, sn string, n string, role ServantRole) *Ser
 }
 
 func (at *ServiceTask) Run(r router.Router, sn string, n string, role ServantRole) {
+	fmt.Println("App task [", n, "] at [", sn, "] starts")
 	//init phase
 	at.init(r, sn, n, role)
 	//service mainLoop
 	cont := true
+	svcCmdChan := at.svcCmdChan
+	svcReqChan := at.svcReqChan
 	for cont {
 		select {
-		case cmd := <-at.sysCmdChan:
-			if !closed(at.sysCmdChan) {
+		case cmd, sysOpen := <-at.sysCmdChan:
+			if sysOpen {
 				cont = at.handleCmd(cmd)
+				if !cont {
+					fmt.Println("App task [", at.name, "] at [", at.servantName, "] exit1")
+				}
 			} else {
+				fmt.Println("App task [", at.name, "] at [", at.servantName, "] exit2")
 				cont = false
 			}
-		case req := <-at.svcReqChan:
-			if !closed(at.svcReqChan) {
+		case req, reqOpen := <-svcReqChan:
+			if reqOpen {
 				if at.role == Active {
 					at.handleSvcReq(req)
 				}
 			} else {
-				cont = false
+				fmt.Println("App task [", at.name, "] at [", at.servantName, "] exit3")
+				//cont = false
+				svcReqChan = nil
 			}
-		case cmd := <-at.svcCmdChan:
-			if !closed(at.svcCmdChan) {
+		//case cmd, svcOpen := <-at.svcCmdChan:
+		case cmd, svcOpen := <-svcCmdChan:
+			if svcOpen {
 				if at.role == Active {
 					switch cmd {
 					case "Reset":
@@ -88,12 +98,17 @@ func (at *ServiceTask) Run(r router.Router, sn string, n string, role ServantRol
 					}
 				}
 			} else {
-				cont = false
+				fmt.Println("App task [", at.name, "] at [", at.servantName, "] exit4")
+				//cont = false
+				svcCmdChan = nil
 			}
-		case be := <-at.bindChan:
-			if be.Count == 0 { //peer exit
-				cont = false
-			}
+			/*
+				case be := <-at.bindChan:
+					if be.Count == 0 { //peer exit
+						fmt.Println("App task [", at.name, "] at [", at.servantName, "] exit5")
+						cont = false
+					}
+			*/
 		}
 	}
 	//shutdown phase
@@ -109,7 +124,7 @@ func (at *ServiceTask) init(r router.Router, sn string, n string, role ServantRo
 	at.random = rand.New(rand.NewSource(time.Seconds()))
 	at.svcRespChan = make(chan string)
 	at.dbReqChan = make(chan *DbReq)
-	at.svcReqChan = make(chan string, router.DefDataChanBufSize)
+	at.svcReqChan = make(chan string)
 	at.sysCmdChan = make(chan string)
 	at.svcCmdChan = make(chan string)
 	at.dbRespChan = make(chan string)
@@ -117,13 +132,31 @@ func (at *ServiceTask) init(r router.Router, sn string, n string, role ServantRo
 	svcname := "/App/" + at.name
 	//output_intf or send chans
 	at.FaultRaiser = router.NewFaultRaiser(router.StrID("/Fault/AppService/Exception"), at.rot, at.name)
-	at.rot.AttachSendChan(router.StrID("/DB/Request"), at.dbReqChan)
-	at.rot.AttachSendChan(router.StrID(svcname+"/Response"), at.svcRespChan)
+	_, err := at.rot.AttachSendChan(router.StrID("/DB/Request"), at.dbReqChan)
+	if err != nil {
+		fmt.Println(sn, " failed to attach /DB/Request")
+	}
+	_, err = at.rot.AttachSendChan(router.StrID(svcname+"/Response"), at.svcRespChan)
+	if err != nil {
+		fmt.Println(sn, " failed to attach svcname+/Response")
+	}
 	//input_intf or recv chans
-	at.rot.AttachRecvChan(router.StrID("/Sys/Command"), at.sysCmdChan)
-	at.rot.AttachRecvChan(router.StrID(svcname+"/Command"), at.svcCmdChan)
-	at.rot.AttachRecvChan(router.StrID(svcname+"/DB/Response"), at.dbRespChan)
-	at.rot.AttachRecvChan(router.StrID(svcname+"/Request"), at.svcReqChan, at.bindChan)
+	_, err = at.rot.AttachRecvChan(router.StrID("/Sys/Command"), at.sysCmdChan)
+	if err != nil {
+		fmt.Println(sn, " failed to attach /Sys/Command")
+	}
+	_, err = at.rot.AttachRecvChan(router.StrID(svcname+"/Command"), at.svcCmdChan)
+	if err != nil {
+		fmt.Println(sn, " failed to attach svcname+/Command")
+	}
+	_, err = at.rot.AttachRecvChan(router.StrID(svcname+"/DB/Response"), at.dbRespChan)
+	if err != nil {
+		fmt.Println(sn, " failed to attach svcname+/DB/Response")
+	}
+	_, err = at.rot.AttachRecvChan(router.StrID(svcname+"/Request"), at.svcReqChan, at.bindChan)
+	if err != nil {
+		fmt.Println(sn, " failed to attach svcname+/Request")
+	}
 }
 
 func (at *ServiceTask) shutdown() {
@@ -151,18 +184,22 @@ func (at *ServiceTask) handleCmd(cmd string) bool {
 	case "Start":
 		if at.role == Standby {
 			//first drain old req
-			_, ok := <-at.svcReqChan
-			for ok {
-				if closed(at.svcReqChan) {
-					cont = false
-					break
+			more := true
+			for more {
+				select {
+				case _, ok := <-at.svcReqChan:
+					if !ok {
+						more = false
+						cont = false
+					}
+				default:
+					more = false
 				}
-				_, ok = <-at.svcReqChan
 			}
+			at.numTrans = 0
+			at.role = Active
+			fmt.Println("App Service [", at.name, "] at [", at.servantName, "] is activated")
 		}
-		at.numTrans = 0
-		at.role = Active
-		fmt.Println("App Service [", at.name, "] at [", at.servantName, "] is activated")
 	case "Stop":
 		at.role = Standby
 		fmt.Println("App Service [", at.name, "] at [", at.servantName, "] is stopped")

@@ -8,8 +8,28 @@ package router
 
 import (
 	"reflect"
-	"os"
+	"fmt"
 )
+
+//a message struct for propagating router's namespace changes (chan attachments or detachments)
+type ChanInfoMsg struct {
+	Info []*ChanInfo
+}
+
+//a message struct holding information about id and its associated ChanType
+type ChanInfo struct {
+	Id       Id
+	ChanType reflect.Type
+	ElemType *chanElemTypeData
+}
+
+func (ici ChanInfo) String() string {
+	info := fmt.Sprintf("%v", ici.Id)
+	if ici.ElemType != nil {
+		info = fmt.Sprintf("%v_%v", info, ici.ElemType.FullName)
+	}
+	return info
+}
 
 //store marshaled information about ChanType
 type chanElemTypeData struct {
@@ -21,19 +41,7 @@ type chanElemTypeData struct {
 	TypeEncoding string
 }
 
-//a message struct holding information about id and its associated ChanType
-type IdChanInfo struct {
-	Id       Id
-	ChanType *reflect.ChanType
-	ElemType *chanElemTypeData
-}
-
-//a message struct for propagating router's namespace changes (chan attachments or detachments)
-type IdChanInfoMsg struct {
-	Info []*IdChanInfo
-}
-
-//the generic message
+//the generic message wrapper
 type genericMsg struct {
 	Id   Id
 	Data interface{}
@@ -41,16 +49,20 @@ type genericMsg struct {
 
 //a message struct containing information about remote router connection
 type ConnInfoMsg struct {
-	ConnInfo       string
-	Error          os.Error
-	Id             Id
-	Type           int //async/flowControlled/raw
+	ConnInfo string
+	Error    string
+	Id       Id
+	Type     int //async/flowControlled/raw
 }
 
 //recver-router notify sender-router which channel are ready to recv how many msgs
 type ChanReadyInfo struct {
 	Id     Id
 	Credit int
+}
+
+func (cri ChanReadyInfo) String() string {
+	return fmt.Sprintf("%v_%v", cri.Id, cri.Credit)
 }
 
 type ConnReadyMsg struct {

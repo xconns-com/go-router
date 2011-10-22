@@ -103,12 +103,12 @@ func main() {
 		<-connNow
 		//set up an io conn to ponger thru unix sock
 		addr := "/tmp/pingpong.test"
-		conn, _ := net.Dial("unix", "", addr)
+		conn, _ := net.Dial("unix", addr)
 		fmt.Println("ping conn up")
 
 		//create router and connect it to io conn
 		rot := router.New(router.StrID(), 32, router.BroadcastPolicy)
-		rot.ConnectRemote(conn, router.GobMarshaling)
+		rot.ConnectRemote(conn, router.JsonMarshaling)
 
 		//hook up Pinger and Ponger
 		newPinger(rot, done, numRuns)
@@ -124,7 +124,7 @@ func main() {
 
 		//create router and connect it to io conn
 		rot := router.New(router.StrID(), 32, router.BroadcastPolicy)
-		rot.ConnectRemote(conn, router.GobMarshaling)
+		rot.ConnectRemote(conn, router.JsonMarshaling)
 
 		//hook up Ponger
 		newPonger(rot, done)

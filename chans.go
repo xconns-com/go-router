@@ -14,8 +14,8 @@ import (
 )
 
 /* 
- Channel interface defines functional api of Go's chan:
- based on reflect.ChanValue's method set
+ Channel interface defines functional api of Go's channel:
+ based on reflect.Value's channel related method set
  allow programming "generic" channels with reflect.Value as msgs
  add some utility Channel types
 */
@@ -26,15 +26,18 @@ type Channel interface {
 }
 
 //common interface for msg senders
+//and senders are responsible for closing channels
 type Sender interface {
 	Send(reflect.Value)
 	TrySend(reflect.Value) bool
+	Close()
 }
 
 //common interface for msg recvers
+//recvers will check if channels are closed or not
 type Recver interface {
-	Recv() reflect.Value
-	TryRecv() reflect.Value
+	Recv() (reflect.Value, bool)
+	TryRecv() (reflect.Value, bool)
 }
 
 //basic chan state
@@ -42,8 +45,6 @@ type ChanState interface {
 	Type() reflect.Type
 	Interface() interface{}
 	IsNil() bool
-	Close()
-	Closed() bool
 	Cap() int
 	Len() int
 }
@@ -63,24 +64,25 @@ type RecvChan interface {
 //GenericMsgChan: 
 //mux msgs with diff ids into a common "chan *genericMsg"
 //and expose Channel api
+//for close, will send a special msg to mark close of one sender
+//other part is responsible for counting active senders and close underlying
+//channels if all senders close
 type genericMsgChan struct {
-	id               Id
-	Channel          //must have element type: *genericMsg
-	sendChanCloseMsg bool
+	id      Id
+	Channel //must have element type: *genericMsg
 }
 
-func newGenMsgChan(id Id, ch Channel, sendClose bool) *genericMsgChan {
+func newGenMsgChan(id Id, ch Channel) *genericMsgChan {
 	//add check to make sure Channel of type: chan *genericMsg
-	return &genericMsgChan{id, ch, sendClose}
+	return &genericMsgChan{id, ch}
 }
 
-func newGenericMsgChan(id Id, ch chan *genericMsg, sendClose bool) *genericMsgChan {
-	return &genericMsgChan{id, reflect.NewValue(ch).(*reflect.ChanValue), sendClose}
+func newGenericMsgChan(id Id, ch chan *genericMsg) *genericMsgChan {
+	return &genericMsgChan{id, reflect.ValueOf(ch)}
 }
 
 /* delegate following calls to embeded Channel's api
 func (gch *genericMsgChan) Type() reflect.Type
-func (gch *genericMsgChan) Closed() bool
 func (gch *genericMsgChan) IsNil() bool
 func (gch *genericMsgChan) Len() int
 func (gch *genericMsgChan) Cap() int
@@ -92,18 +94,17 @@ func (gch *genericMsgChan) TryRecv() reflect.Value
 func (gch *genericMsgChan) Interface() interface{} { return gch }
 
 func (gch *genericMsgChan) Close() {
-	if gch.sendChanCloseMsg {
-		id1, _ := gch.id.Clone(NumScope, NumMembership) //special id to mark chan close
-		gch.Channel.Send(reflect.NewValue(&genericMsg{id1, nil}))
-	}
+	//sending chanCloseMsg, do not do the real closing of genericMsgChan 
+	id1, _ := gch.id.Clone(NumScope, NumMembership) //special id to mark chan close
+	gch.Channel.Send(reflect.ValueOf(&genericMsg{id1, nil}))
 }
 
 func (gch *genericMsgChan) Send(v reflect.Value) {
-	gch.Channel.Send(reflect.NewValue(&genericMsg{gch.id, v.Interface()}))
+	gch.Channel.Send(reflect.ValueOf(&genericMsg{gch.id, v.Interface()}))
 }
 
 func (gch *genericMsgChan) TrySend(v reflect.Value) bool {
-	return gch.Channel.TrySend(reflect.NewValue(&genericMsg{gch.id, v.Interface()}))
+	return gch.Channel.TrySend(reflect.ValueOf(&genericMsg{gch.id, v.Interface()}))
 }
 
 /*
@@ -123,6 +124,9 @@ type asyncChan struct {
 func (ac *asyncChan) Close() {
 	ac.Lock()
 	defer ac.Unlock()
+	if ac.closed {
+		panic("Close a closed chan")
+	}
 	ac.closed = true
 	if ac.buffer == nil { //no background forwarder running
 		ac.Channel.Close()
@@ -137,18 +141,22 @@ func (ac *asyncChan) Cap() int {
 	return UnlimitedBuffer //unlimited
 }
 
-/*how to count the items being forwarded at background?
 func (ac *asyncChan) Len() int {
-return UnlimitedBuffer
+	l := ac.Channel.Len()
+	ac.Lock()
+	defer ac.Unlock()
+	if ac.buffer == nil {
+		return l
+	}
+	return l + ac.buffer.Len()
 }
-*/
 
 //for async chan, Send() never block because of unlimited buffering
 func (ac *asyncChan) Send(v reflect.Value) {
 	ac.Lock()
 	defer ac.Unlock()
 	if ac.closed {
-		return //sliently dropped
+		panic("Send on closed chan")
 	}
 	if ac.buffer == nil {
 		if ac.Channel.TrySend(v) {
@@ -187,94 +195,6 @@ func (ac *asyncChan) TrySend(v reflect.Value) bool {
 	return true
 }
 
-/*
-//asyncChan2 - another async chan for pooling
-type asyncChan2 struct {
-	Channel
-	sync.Mutex
-	buffer     list.List
-	forwarding bool //is background forwarding goroutine active
-	closed     bool
-}
-
-func (ac *asyncChan2) Interface() interface{} {
-	return ac
-}
-
-func (ac *asyncChan2) Close() {
-	ac.Lock()
-	defer ac.Unlock()
-	ac.closed = true
-	if !ac.forwarding {
-		ac.Channel.Close()
-	}
-}
-
-func (ac *asyncChan2) Cap() int {
-	return UnlimitedBuffer //unlimited
-}
-
-func (ac *asyncChan2) Len() int {
-	ac.Lock()
-	defer ac.Unlock()
-	return ac.buffer.Len() + ac.Channel.Len()
-}
-
-//for async chan, Send() never block assyming unlimited buffering
-func (ac *asyncChan2) Send(v reflect.Value) {
-	ac.Lock()
-	defer ac.Unlock()
-	if ac.closed {
-		return //sliently dropped
-	}
-	if !ac.forwarding {
-		if ac.Channel.TrySend(v) {
-			return
-		}
-		ac.forwarding = true
-		ac.buffer.PushBack(v)
-		//spawn forwarder
-		go func() {
-			var e *list.Element
-			for {
-				ac.Lock()
-				if e != nil {
-					ac.buffer.Remove(e)
-				}
-				if ac.buffer.Len() == 0 {
-					ac.forwarding = false
-					if ac.closed {
-						ac.Channel.Close()
-					}
-					ac.Unlock()
-					return
-				}
-				e = ac.buffer.Front()
-				ac.Unlock()
-				ac.Channel.Send(e.Value.(reflect.Value))
-			}
-		}()
-	} else {
-		ac.buffer.PushBack(v)
-	}
-}
-
-func (ac *asyncChan2) TrySend(v reflect.Value) bool {
-	ac.Send(v)
-	return true
-}
-
- asyncChanPool:
- a pool of async chans share a few forwarder goroutines
-*/
-/*
- type asyncChanPool struct {
- }
-
- func (acp *asyncChanPool) newAsyncChan(ch Channel) Channel {
- }
-
-*/
 
 /*
  flowChan: flow controlled channel
@@ -286,47 +206,82 @@ func (ac *asyncChan2) TrySend(v reflect.Value) bool {
 type flowChanSender struct {
 	Channel
 	creditChan chan bool
+	creditCap  int
+	credit     int
+	sync.Mutex //protect credit/creditChan change
 }
 
 func newFlowChanSender(ch Channel, credit int) (*flowChanSender, os.Error) {
 	fc := new(flowChanSender)
 	fc.Channel = ch
+	if credit <= 0 {
+		return nil, os.ErrorString("Flow Controlled Chan: invalid credit")
+	}
+	fc.credit = credit
+	fc.creditCap = credit
 	//for unlimited buffer, ch.Cap() return UnlimitedBuffer(-1)
 	if ch.Cap() != UnlimitedBuffer && ch.Cap() < credit {
-		return nil, os.ErrorString("Flow Controlled Chan do not have enough buffering")
+		return nil, os.ErrorString("Flow Controlled Chan: do not have enough buffering")
 	}
-	fc.creditChan = make(chan bool, credit)
-	for i := 0; i < credit; i++ {
-		fc.creditChan <- true
-	}
+	fc.creditChan = make(chan bool, 1)
+	fc.creditChan <- true //since we have credit, turn on creditChan
 	return fc, nil
 }
 
 func (fc *flowChanSender) Send(v reflect.Value) {
-	<-fc.creditChan //use one credit 
+	<-fc.creditChan //wait here for one credit 
+	fc.Lock()
+	fc.credit--
+	if fc.credit > 0 {
+		select {
+		case fc.creditChan <- true:
+		default:
+		}
+	}
+	fc.Unlock()
 	fc.Channel.Send(v)
 }
 
 func (fc *flowChanSender) TrySend(v reflect.Value) bool {
-	_, ok := <-fc.creditChan
-	if !ok {
+	select {
+	case _ = <-fc.creditChan:
+	default:
 		return false
 	}
-	fc.Channel.Send(v) //should not block here since credit is granted
-	return true
+	fc.Lock()
+	fc.credit--
+	if fc.credit > 0 {
+		select {
+		case fc.creditChan <- true:
+		default:
+		}
+	}
+	fc.Unlock()
+	return fc.Channel.TrySend(v)
 }
 
 func (fc *flowChanSender) Len() int {
-	return cap(fc.creditChan) - len(fc.creditChan)
+	fc.Lock()
+	defer fc.Unlock()
+	return fc.creditCap - fc.credit
 }
 
 func (fc *flowChanSender) Cap() int {
-	return cap(fc.creditChan)
+	return fc.creditCap
 }
 
 func (fc *flowChanSender) ack(n int) {
-	for i := 0; i < n; i++ {
-		_ = fc.creditChan <- true
+	fc.Lock()
+	defer fc.Unlock()
+	if fc.credit == 0 {
+		select {
+		case fc.creditChan <- true:
+		default:
+		}
+	}
+	fc.credit += n
+	if fc.credit > fc.creditCap {
+		fc.credit = fc.creditCap
 	}
 }
 
@@ -334,24 +289,26 @@ func (fc *flowChanSender) Interface() interface{} {
 	return fc
 }
 
+
 type flowChanRecver struct {
 	Channel
 	ack func(int)
 }
 
-func (fc *flowChanRecver) Recv() reflect.Value {
-	v := fc.Channel.Recv()
-	fc.ack(1)
-	return v
+func (fc *flowChanRecver) Recv() (v reflect.Value, ok bool) {
+	v, ok = fc.Channel.Recv()
+	if ok {
+		fc.ack(1)
+	}
+	return
 }
 
-func (fc *flowChanRecver) TryRecv() reflect.Value {
-	v := fc.Channel.TryRecv()
-	if v == nil {
-		return nil
+func (fc *flowChanRecver) TryRecv() (v reflect.Value, ok bool) {
+	v, ok = fc.Channel.TryRecv()
+	if v.IsValid() && ok {
+		fc.ack(1)
 	}
-	fc.ack(1)
-	return v
+	return
 }
 
 func (fc *flowChanRecver) Interface() interface{} {

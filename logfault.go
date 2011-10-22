@@ -10,9 +10,10 @@ import (
 	"os"
 	"time"
 	"log"
+	"sync"
 )
 
-//Some basic error msgs for log and fault
+//Some basic router internal error msgs for log and fault
 var (
 	errIdTypeMismatch        = "id type mismatch"
 	errRouterTypeMismatch    = "router type mismatch"
@@ -63,6 +64,7 @@ type LogRecord struct {
 	Timestamp int64
 }
 
+//a LogRecord sender
 type logger struct {
 	routCh  *RoutedChan
 	source  string
@@ -93,24 +95,29 @@ func (l *logger) log(p LogPriority, msg interface{}) {
 
 	lr := &LogRecord{p, l.source, msg, time.Nanoseconds()}
 	/*
-	 //when logChan full, drop the oldest log record, avoid block / slow down app
-	 for !(l.logChan <- lr) {
-	 <- l.logChan;
-	 }
+			 //when logChan full, drop the oldest log record, avoid block / slow down app
+		 L: for {
+				select {
+				case l.logChan <- lr:
+					break L
+				default:
+					<- l.logChan
+				}
+			}
 	*/
 	//log all msgs even if too much log recrods may block / slow down app
 	l.logChan <- lr
 }
 
 func (l *logger) Close() {
-	close(l.logChan)
-	//l.router.DetachChan(l.id, l.logChan);
+	l.router.DetachChan(l.id, l.logChan)
 }
 
 //Logger can be embedded into user structs / types, which then can use Log() / LogError() directly
 type Logger struct {
 	router *routerImpl
 	logger *logger
+	sync.Mutex
 }
 
 //NewLogger will create a Logger object which sends log messages thru id in router "r"
@@ -119,6 +126,8 @@ func NewLogger(id Id, r Router, src string) *Logger {
 }
 
 func (l *Logger) Init(id Id, r Router, src string) *Logger {
+	l.Lock()
+	defer l.Unlock()
 	l.router = r.(*routerImpl)
 	if len(src) > 0 {
 		l.logger = newlogger(id, l.router, src, DefLogBufSize)
@@ -127,22 +136,30 @@ func (l *Logger) Init(id Id, r Router, src string) *Logger {
 }
 
 func (l *Logger) Close() {
+	l.Lock()
+	defer l.Unlock()
 	if l.logger != nil {
-		l.logger.Close()
+		ll := l.logger
+		l.logger = nil
+		ll.Close()
 	}
 }
 
 //send a log record to log id in router
-func (r *Logger) Log(p LogPriority, msg interface{}) {
-	if r.logger != nil {
-		r.logger.log(p, msg)
+func (l *Logger) Log(p LogPriority, msg interface{}) {
+	l.Lock()
+	defer l.Unlock()
+	if l.logger != nil {
+		l.logger.log(p, msg)
 	}
 }
 
 //send a log record and store error info in it
-func (r *Logger) LogError(err os.Error) {
-	if r.logger != nil {
-		r.logger.log(LOG_ERROR, err)
+func (l *Logger) LogError(err os.Error) {
+	l.Lock()
+	defer l.Unlock()
+	if l.logger != nil {
+		l.logger.log(LOG_ERROR, err)
 	}
 }
 
@@ -150,6 +167,8 @@ func (r *Logger) LogError(err os.Error) {
 type LogSink struct {
 	sinkChan chan *LogRecord
 	sinkExit chan bool
+	id       Id
+	r        Router
 }
 
 //create a new log sink, which receives log messages from id in router "r"
@@ -158,28 +177,30 @@ func NewLogSink(id Id, r Router) *LogSink { return new(LogSink).Init(id, r) }
 func (l *LogSink) Init(id Id, r Router) *LogSink {
 	l.sinkExit = make(chan bool)
 	l.sinkChan = make(chan *LogRecord, DefLogBufSize)
-	l.runConsoleLogSink(id, r)
+	l.id = id
+	l.r = r
+	l.runConsoleLogSink()
 	return l
 }
 
 func (l *LogSink) Close() {
 	if l.sinkChan != nil {
-		close(l.sinkChan)
+		l.r.DetachChan(l.id, l.sinkChan)
 		//wait for sink gorutine to exit
 		<-l.sinkExit
 	}
 }
 
-func (l *LogSink) runConsoleLogSink(logId Id, r Router) {
-	_, err := r.AttachRecvChan(logId, l.sinkChan)
+func (l *LogSink) runConsoleLogSink() {
+	_, err := l.r.AttachRecvChan(l.id, l.sinkChan)
 	if err != nil {
 		log.Println("*** failed to enable router's console log sink ***")
 		return
 	}
 	go func() {
 		for {
-			lr := <-l.sinkChan
-			if closed(l.sinkChan) {
+			lr, snkOpen := <-l.sinkChan
+			if !snkOpen {
 				break
 			}
 			//convert timestamp, following format/code of package "log" for consistency
@@ -190,7 +211,6 @@ func (l *LogSink) runConsoleLogSink(logId Id, r Router) {
 			 ts += itoa(int(t.Year)) + "/" + itoa(t.Month) + "/" + itoa(t.Day) + " "
 			 ts += itoa(t.Hour) + ":" + itoa(t.Minute) + ":" + itoa(t.Second)
 			*/
-
 			switch lr.Pri {
 			case LOG_ERROR:
 				fallthrough
@@ -207,7 +227,6 @@ func (l *LogSink) runConsoleLogSink(logId Id, r Router) {
 		l.sinkExit <- true
 		log.Println("console log goroutine exits")
 	}()
-	//err = r.DetachChan(logId, l.sinkChan);
 }
 
 
@@ -259,14 +278,14 @@ func (l *faultRaiser) raise(msg os.Error) {
 }
 
 func (l *faultRaiser) Close() {
-	close(l.faultChan)
-	//l.router.DetachChan(l.id, l.faultChan);
+	l.router.DetachChan(l.id, l.faultChan)
 }
 
 //FaultRaiser can be embedded into user structs/ types, which then can call Raise() directly
 type FaultRaiser struct {
 	router      *routerImpl
 	faultRaiser *faultRaiser
+	sync.Mutex
 }
 
 //create a new FaultRaiser to send FaultRecords to id in router "r"
@@ -275,6 +294,8 @@ func NewFaultRaiser(id Id, r Router, src string) *FaultRaiser {
 }
 
 func (l *FaultRaiser) Init(id Id, r Router, src string) *FaultRaiser {
+	l.Lock()
+	defer l.Unlock()
 	l.router = r.(*routerImpl)
 	if len(src) > 0 {
 		l.faultRaiser = newfaultRaiser(id, r, src, DefCmdChanBufSize)
@@ -283,13 +304,19 @@ func (l *FaultRaiser) Init(id Id, r Router, src string) *FaultRaiser {
 }
 
 func (l *FaultRaiser) Close() {
+	l.Lock()
+	defer l.Unlock()
 	if l.faultRaiser != nil {
-		l.faultRaiser.Close()
+		ll := l.faultRaiser
+		l.faultRaiser = nil
+		ll.Close()
 	}
 }
 
 //raise a fault - send a FaultRecord to faultId in router
 func (r *FaultRaiser) Raise(msg os.Error) {
+	r.Lock()
+	defer r.Unlock()
 	if r.faultRaiser != nil {
 		r.faultRaiser.raise(msg)
 	} else {

@@ -13,7 +13,7 @@ package router
  1. bound with specific proxy
  2. defines which ids can pass in / out to router thru this proxy
  3. only filter the ids of application msgs (NOT system msgs),
- only used in processing namespace change msgs: PubId/SubId
+ only involved in processing namespace change msgs: PubId/SubId
  4. by default, if no filter is defined, everything is allowed
  5. filters are used against ids in local namespace, not translated ones
 */

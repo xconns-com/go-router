@@ -39,8 +39,8 @@ type SysMgrTask struct {
 	childBindChan chan *router.BindEvent
 	stopChan      chan bool
 	startChan     chan bool
-	pubChan       chan *router.IdChanInfoMsg
-	unpubChan     chan *router.IdChanInfoMsg
+	pubChan       chan *router.ChanInfoMsg
+	unpubChan     chan *router.ChanInfoMsg
 	pubBindChan   chan *router.BindEvent
 	unpubBindChan chan *router.BindEvent
 }
@@ -72,7 +72,7 @@ func (smt *SysMgrTask) Run(r router.Router, n string, role ServantRole) {
 		go smt.monitorActiveHeartbeat()
 	}
 	//service mainLoop
-	fmt.Println("SysMgrTask [", n, "] starts mainloop")
+	//fmt.Println("SysMgrTask [", n, "] starts mainloop")
 	cont := true
 	for cont {
 		select {
@@ -80,20 +80,27 @@ func (smt *SysMgrTask) Run(r router.Router, n string, role ServantRole) {
 			//at standby servant, SysMgrTask will monitor heartbeats
 			//active servant stopped, change my role to active
 			smt.role = Active
-			//drain remaining out-of-date OOS msgs
-			_, ok := <-smt.sysOOSChan
-			for ok {
-				_, ok = <-smt.sysOOSChan
+			//fmt.Println("servant wake up 1")
+			//cleanup, drain old out-of-date OOS msgs
+		L:
+			for {
+				select {
+				case _ = <-smt.sysOOSChan:
+				default:
+					break L
+				}
 			}
+			//fmt.Println("servant wake up 2")
 			//ask all child tasks coming up to service
 			smt.sysCmdChan <- "Start"
+			//fmt.Println("servant wake up 3")
 			//start sending heartbeat to standby
 			go smt.sendHeartbeat()
 			fmt.Println("!!!! Servant [", smt.name, "] come up in service ...")
-		case _ = <-smt.sysOOSChan:
+		case _, oosOpen := <-smt.sysOOSChan:
 			//at active servant, per request from FaultMgrTask, SysMgrTask can put the servant
 			//out of service by stopping heartbeating and asking subordinate tasks to stop
-			if !closed(smt.sysOOSChan) {
+			if oosOpen {
 				smt.role = Standby
 				smt.stopHeartbeat() //1 second later, standby will come up
 				fmt.Println("xxxx Servant [", smt.name, "] will take a break and standby ...")
@@ -104,12 +111,29 @@ func (smt *SysMgrTask) Run(r router.Router, n string, role ServantRole) {
 				fmt.Println("error: OOS chan closed")
 				cont = false
 			}
-		case pub := <-smt.pubChan:
-			if !closed(smt.pubChan) {
+		case pub, pubOpen := <-smt.pubChan:
+			if pubOpen {
+				/*
+					fmt.Println("SysMgrTask [", n, "] recved pubInfo: ", pub.Info)
+					fmt.Println("SysMgrTask [", n, "] print current routing map before changing")
+					sendMap := r.IdsForSend(func(id router.Id)bool{return true})
+					recvMap := r.IdsForRecv(func(id router.Id)bool{return true})
+					fmt.Println("SysMgrTask [", n, "] sendMap:")
+					for _,v := range sendMap {
+						fmt.Println("send [", n, "] ",v)
+					}
+					fmt.Println("SysMgrTask [", n, "] recvMap:")
+					for _,v := range recvMap {
+						fmt.Println("recv [", n, "] ",v)
+					}
+				*/
 				for _, v := range pub.Info {
 					id := v.Id.(*router.StrId)
+					//fmt.Printf("%s get pubMsg id:%s\n", smt.name, id)
 					data := strings.Split(id.Val, "/", -1)
+					//fmt.Printf("%s split got:%s\n", smt.name, data)
 					if data[1] == "App" {
+						//fmt.Println(smt.name, " right bef send addService cmd")
 						smt.sysCmdChan <- fmt.Sprintf("AddService:%s", data[2])
 						fmt.Printf("%s AddService:%s\n", smt.name, data[2])
 						NewServiceTask(smt.rot, smt.name, data[2], smt.role)
@@ -119,8 +143,8 @@ func (smt *SysMgrTask) Run(r router.Router, n string, role ServantRole) {
 				fmt.Println("error: pubChan closed")
 				cont = false
 			}
-		case unpub := <-smt.unpubChan:
-			if !closed(smt.unpubChan) {
+		case unpub, unpubOpen := <-smt.unpubChan:
+			if unpubOpen {
 				for _, v := range unpub.Info {
 					id := v.Id.(*router.StrId)
 					data := strings.Split(id.Val, "/", -1)
@@ -158,8 +182,8 @@ func (smt *SysMgrTask) init(r router.Router, n string, role ServantRole) {
 	smt.rot.AttachRecvChan(router.StrID("/Sys/Ctrl/Heartbeat", router.ScopeRemote), smt.htbtRecvChan)
 	smt.rot.AttachRecvChan(router.StrID("/Sys/OutOfService"), smt.sysOOSChan)
 	//
-	smt.pubChan = make(chan *router.IdChanInfoMsg)
-	smt.unpubChan = make(chan *router.IdChanInfoMsg)
+	smt.pubChan = make(chan *router.ChanInfoMsg)
+	smt.unpubChan = make(chan *router.ChanInfoMsg)
 	//use pubBindChan/unpubBindChan when attaching chans to PubId/UnPubId, so that they will not be
 	//closed when all clients close and leave
 	smt.pubBindChan = make(chan *router.BindEvent, 1)
@@ -180,30 +204,35 @@ func (smt *SysMgrTask) shutdown() {
 	smt.rot.DetachChan(smt.rot.NewSysID(router.UnPubId, router.ScopeRemote), smt.unpubChan)
 }
 
-//standby servant will monitor heartbeat from active Servant, if missing 3 in a row, come up active
+//standby servant will monitor heartbeat from active Servant, if missing 2 in a row, come up active
 func (smt *SysMgrTask) monitorActiveHeartbeat() {
 	fmt.Println(smt.name, " enter monitor heartbeat")
 	miss := 0
 	//first block wait for active servant coming up
 	<-smt.htbtRecvChan
 	//drain remaining out-of-date heartbeats, if the standby coming up late
-	_, ok := <-smt.htbtRecvChan
-	for ok {
-		_, ok = <-smt.htbtRecvChan
+L1:
+	for {
+		select {
+		case _ = <-smt.htbtRecvChan:
+		default:
+			break L1
+		}
 	}
 	//start heartbeat monitoring, standby servant should recv about 4-5 heartbeats per second from
 	//active servant, otherwise, it will come up as active
+L2:
 	for {
 		time.Sleep(2e8)
-		_, ok = <-smt.htbtRecvChan
-		if !ok {
-			miss++
-			if miss > 1 {
-				break
-			}
-		} else {
+		select {
+		case _ = <-smt.htbtRecvChan:
 			//fmt.Println("standby [", smt.name, "] recv heartbeat from active")
 			miss = 0
+		default:
+			miss++
+			if miss > 1 {
+				break L2
+			}
 		}
 	}
 	fmt.Println(smt.name, " exit monitor heartbeat")
@@ -213,15 +242,18 @@ func (smt *SysMgrTask) monitorActiveHeartbeat() {
 func (smt *SysMgrTask) sendHeartbeat() {
 	fmt.Println(smt.name, " enter send heartbeat")
 	//send a heartbeat to standby servant every 1/5 second
+L1:
 	for {
 		//check if should stop heartbeating
-		_, ok := <-smt.stopChan
-		if ok {
-			break
+		select {
+		case _ = <-smt.stopChan:
+			break L1
+		default:
 		}
-		//send heartbeat in non-blocking way
-		for !(smt.htbtSendChan <- time.LocalTime()) {
-			_, _ = <-smt.htbtSendChan
+		//send heartbeat
+		select {
+		case smt.htbtSendChan <- time.LocalTime():
+		default:
 		}
 		time.Sleep(2e8)
 	}

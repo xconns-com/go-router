@@ -5,24 +5,24 @@
 //
 
 /*
-"router" is a Go package for peer-peer pub/sub message passing. 
-The basic usage is to attach a send channel to an id in router to send messages, 
-and attach a recv channel to an id to receive messages. If these 2 ids match, 
-the messages from send channel will be "routed" to recv channel, e.g.
+ "router" is a Go package for peer-peer pub/sub message passing. 
+ The basic usage is to attach a send channel to an id in router to send messages, 
+ and attach a recv channel to an id to receive messages. If these 2 ids match, 
+ the messages from send channel will be "routed" to recv channel, e.g.
 
-   rot := router.New(...)
-   chan1 := make(chan string)
-   chan2 := make(chan string)
-   chan3 := make(chan string)
-   rot.AttachSendChan(PathID("/sports/basketball"), chan1)
-   rot.AttachRecvChan(PathID("/sports/basketball"), chan2)
-   rot.AttachRecvChan(PathID("/sports/*"), chan3)
+ rot := router.New(...)
+ chan1 := make(chan string)
+ chan2 := make(chan string)
+ chan3 := make(chan string)
+ rot.AttachSendChan(PathID("/sports/basketball"), chan1)
+ rot.AttachRecvChan(PathID("/sports/basketball"), chan2)
+ rot.AttachRecvChan(PathID("/sports/*"), chan3)
 
-We can use integers, strings, pathnames, or structs as Ids in router (maybe regex ids
-and tuple id in future).
+ We can use integers, strings, pathnames, or structs as Ids in router (maybe regex ids
+ and tuple id in future).
 
-we can connect two routers so that channels attached to router1 can communicate with
-channels attached to router2 transparently.
+ we can connect two routers so that channels attached to router1 can communicate with
+ channels attached to router2 transparently.
 */
 package router
 
@@ -30,7 +30,6 @@ import (
 	"reflect"
 	"fmt"
 	"os"
-	"container/vector"
 	"io"
 	"sync"
 )
@@ -40,7 +39,6 @@ const (
 	DefLogBufSize      = 256
 	DefDataChanBufSize = 32
 	DefCmdChanBufSize  = 64
-	DefBindingSetSize  = 4
 	UnlimitedBuffer    = -1
 	FlowControl        = true
 )
@@ -61,7 +59,7 @@ type Router interface {
 	//Detach sendChan/recvChan from router
 	DetachChan(Id, interface{}) os.Error
 
-	//Shutdown router
+	//Shutdown router, and close attached proxies and chans
 	Close()
 
 	//Connect this router to another router.
@@ -86,15 +84,15 @@ type Router interface {
 	NewSysID(idx int, args ...int) Id
 
 	//return all ids and their ChanTypes from router's namespace which satisfy predicate
-	IdsForSend(predicate func(id Id) bool) map[interface{}]*IdChanInfo
-	IdsForRecv(predicate func(id Id) bool) map[interface{}]*IdChanInfo
+	IdsForSend(predicate func(id Id) bool) map[interface{}]*ChanInfo
+	IdsForRecv(predicate func(id Id) bool) map[interface{}]*ChanInfo
 }
 
 //Major data structures for router:
 //1. tblEntry: an entry for each id in router
 //2. routerImpl: main data struct of router
 type tblEntry struct {
-	chanType *reflect.ChanType
+	chanType reflect.Type
 	id       Id
 	senders  map[interface{}]*RoutedChan
 	recvers  map[interface{}]*RoutedChan
@@ -102,6 +100,7 @@ type tblEntry struct {
 
 type routerImpl struct {
 	async          bool
+	closed         bool
 	defChanBufSize int
 	dispPolicy     DispatchPolicy
 	seedId         Id
@@ -112,7 +111,7 @@ type routerImpl struct {
 	sysIds         [NumSysInternalIds]Id
 	notifier       *notifier
 	proxLock       sync.Mutex
-	proxies        vector.Vector
+	proxies        []Proxy
 	bufSizeLock    sync.Mutex
 	recvBufSizes   map[interface{}]int
 	//for log/debug, if name != nil, debug is enabled
@@ -138,33 +137,33 @@ func (s *routerImpl) SysID(indx int) Id {
 	return s.sysIds[indx]
 }
 
-func (s *routerImpl) IdsForSend(predicate func(id Id) bool) map[interface{}]*IdChanInfo {
-	ids := make(map[interface{}]*IdChanInfo)
+func (s *routerImpl) IdsForSend(predicate func(id Id) bool) map[interface{}]*ChanInfo {
+	ids := make(map[interface{}]*ChanInfo)
 	s.tblLock.Lock()
+	defer s.tblLock.Unlock()
 	for _, v := range s.routingTable {
 		for _, e := range v.senders {
 			idx := e.Id.SysIdIndex()
 			if idx < 0 && predicate(e.Id) {
-				ids[e.Id.Key()] = &IdChanInfo{Id: e.Id, ChanType: v.chanType}
+				ids[e.Id.Key()] = &ChanInfo{Id: e.Id, ChanType: v.chanType}
 			}
 		}
 	}
-	s.tblLock.Unlock()
 	return ids
 }
 
-func (s *routerImpl) IdsForRecv(predicate func(id Id) bool) map[interface{}]*IdChanInfo {
-	ids := make(map[interface{}]*IdChanInfo)
+func (s *routerImpl) IdsForRecv(predicate func(id Id) bool) map[interface{}]*ChanInfo {
+	ids := make(map[interface{}]*ChanInfo)
 	s.tblLock.Lock()
+	defer s.tblLock.Unlock()
 	for _, v := range s.routingTable {
 		for _, e := range v.recvers {
 			idx := e.Id.SysIdIndex()
 			if idx < 0 && predicate(e.Id) {
-				ids[e.Id.Key()] = &IdChanInfo{Id: e.Id, ChanType: v.chanType}
+				ids[e.Id.Key()] = &ChanInfo{Id: e.Id, ChanType: v.chanType}
 			}
 		}
 	}
-	s.tblLock.Unlock()
 	return ids
 }
 
@@ -182,16 +181,16 @@ func (s *routerImpl) AttachSendChan(id Id, v interface{}, args ...interface{}) (
 		s.Raise(err)
 		return
 	}
-	var ok bool
 	ch, internalChan := v.(Channel)
 	if !internalChan {
-		ch, ok = reflect.NewValue(v).(*reflect.ChanValue)
-		if !ok {
+		ch1 := reflect.ValueOf(v)
+		if ch1.Kind() != reflect.Chan {
 			err = os.ErrorString(errInvalidChan)
 			s.LogError(err)
 			s.Raise(err)
 			return
 		}
+		ch = ch1
 	}
 	l := len(args)
 	var bindChan chan *BindEvent
@@ -212,7 +211,7 @@ func (s *routerImpl) AttachSendChan(id Id, v interface{}, args ...interface{}) (
 			return
 		}
 	}
-	routCh = newRoutedChan(id, senderType, ch, s, bindChan)
+	routCh = newRoutedChan(id, Send, ch, s, bindChan)
 	routCh.internalChan = internalChan
 	err = s.attach(routCh)
 	if err != nil {
@@ -228,16 +227,16 @@ func (s *routerImpl) AttachRecvChan(id Id, v interface{}, args ...interface{}) (
 		s.Raise(err)
 		return
 	}
-	var ok bool
 	ch, internalChan := v.(Channel)
 	if !internalChan {
-		ch, ok = reflect.NewValue(v).(*reflect.ChanValue)
-		if !ok {
+		ch1 := reflect.ValueOf(v)
+		if ch1.Kind() != reflect.Chan {
 			err = os.ErrorString(errInvalidChan)
 			s.LogError(err)
 			s.Raise(err)
 			return
 		}
+		ch = ch1
 	}
 	var bindChan chan *BindEvent
 	for i := 0; i < len(args); i++ {
@@ -270,7 +269,7 @@ func (s *routerImpl) AttachRecvChan(id Id, v interface{}, args ...interface{}) (
 		//ie. Cap()==-1, all undelivered msgs will be buffered right before ext recv chans
 		ch = &asyncChan{Channel: ch}
 	}
-	routCh = newRoutedChan(id, recverType, ch, s, bindChan)
+	routCh = newRoutedChan(id, Recv, ch, s, bindChan)
 	routCh.internalChan = internalChan
 	err = s.attach(routCh)
 	if err != nil {
@@ -281,7 +280,7 @@ func (s *routerImpl) AttachRecvChan(id Id, v interface{}, args ...interface{}) (
 }
 
 func (s *routerImpl) DetachChan(id Id, v interface{}) (err os.Error) {
-	s.Log(LOG_INFO, "DetachChan called...")
+	//s.Log(LOG_INFO, "DetachChan called...")
 	if err = s.validateId(id); err != nil {
 		s.LogError(err)
 		s.Raise(err)
@@ -289,19 +288,20 @@ func (s *routerImpl) DetachChan(id Id, v interface{}) (err os.Error) {
 	}
 	ch, ok := v.(Channel)
 	if !ok {
-		ch, ok = reflect.NewValue(v).(*reflect.ChanValue)
-		if !ok {
+		ch1 := reflect.ValueOf(v)
+		if ch1.Kind() != reflect.Chan {
 			err = os.ErrorString(errInvalidChan)
 			s.LogError(err)
 			s.Raise(err)
 			return
 		}
+		ch = ch1
 	}
 	routCh := &RoutedChan{}
 	routCh.Id = id
 	routCh.Channel = ch
 	routCh.router = s
-	err = s.detach(routCh)
+	err = s.detach(routCh, false)
 	return
 }
 
@@ -312,13 +312,21 @@ func (s *routerImpl) Close() {
 
 func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 	//handle id
-	if reflect.Typeof(routCh.Id) != s.idType {
+	if reflect.TypeOf(routCh.Id) != s.idType {
 		err = os.ErrorString(errIdTypeMismatch + ": " + routCh.Id.String())
 		s.LogError(err)
 		return
 	}
 
 	s.tblLock.Lock()
+
+	if s.closed {
+		err = os.ErrorString(fmt.Sprintf("Router closed, cannot attach chan for id %v", routCh.Id))
+		s.LogError(err)
+		s.tblLock.Unlock()
+		return
+	}
+
 	//router entry
 	ent, ok := s.routingTable[routCh.Id.Key()]
 	if !ok {
@@ -332,11 +340,11 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 		ent = &tblEntry{}
 		s.routingTable[routCh.Id.Key()] = ent
 		ent.id = routCh.Id // will only use the Val/Match() part of id
-		ent.chanType = routCh.Channel.Type().(*reflect.ChanType)
+		ent.chanType = routCh.Channel.Type()
 		ent.senders = make(map[interface{}]*RoutedChan)
 		ent.recvers = make(map[interface{}]*RoutedChan)
 	} else {
-		if !routCh.internalChan && routCh.Channel.Type().(*reflect.ChanType) != ent.chanType {
+		if !routCh.internalChan && routCh.Channel.Type() != ent.chanType {
 			err = os.ErrorString(fmt.Sprintf("%s %v", errChanTypeMismatch, routCh.Id))
 			s.LogError(err)
 			s.tblLock.Unlock()
@@ -345,8 +353,8 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 	}
 
 	//check for duplicate
-	switch routCh.kind {
-	case senderType:
+	switch routCh.Kind {
+	case Send:
 		if _, ok = ent.senders[routCh.Channel.Interface()]; ok {
 			err = os.ErrorString(errDupAttachment)
 			s.LogError(err)
@@ -355,7 +363,7 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 		} else {
 			ent.senders[routCh.Channel.Interface()] = routCh
 		}
-	case recverType:
+	case Recv:
 		if _, ok = ent.recvers[routCh.Channel.Interface()]; ok {
 			err = os.ErrorString(errDupAttachment)
 			s.LogError(err)
@@ -367,44 +375,44 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 	}
 
 	idx := routCh.Id.SysIdIndex()
-	var matches vector.Vector
+	var matches []*RoutedChan
 
 	//find bindings for routedChan
 	if s.matchType == ExactMatch {
-		switch routCh.kind {
-		case senderType:
+		switch routCh.Kind {
+		case Send:
 			for _, recver := range ent.recvers {
 				if scope_match(routCh.Id, recver.Id) {
 					s.Log(LOG_INFO, fmt.Sprintf("add bindings: %v -> %v", routCh.Id, recver.Id))
-					matches.Push(recver)
+					matches = append(matches, recver)
 				}
 			}
-		case recverType:
+		case Recv:
 			for _, sender := range ent.senders {
 				if scope_match(sender.Id, routCh.Id) {
 					s.Log(LOG_INFO, fmt.Sprintf("add bindings: %v -> %v", sender.Id, routCh.Id))
-					matches.Push(sender)
+					matches = append(matches, sender)
 				}
 			}
 		}
 	} else { //for PrefixMatch & AssocMatch, need to iterate thru all entries in map routingTable
 		for _, ent2 := range s.routingTable {
 			if routCh.Id.Match(ent2.id) {
-				if routCh.Channel.Type().(*reflect.ChanType) == ent2.chanType ||
-					(routCh.kind == recverType && routCh.internalChan) {
-					switch routCh.kind {
-					case senderType:
+				if routCh.Channel.Type() == ent2.chanType ||
+					(routCh.Kind == Recv && routCh.internalChan) {
+					switch routCh.Kind {
+					case Send:
 						for _, recver := range ent2.recvers {
 							if scope_match(routCh.Id, recver.Id) {
 								s.Log(LOG_INFO, fmt.Sprintf("add bindings: %v -> %v", routCh.Id, recver.Id))
-								matches.Push(recver)
+								matches = append(matches, recver)
 							}
 						}
-					case recverType:
+					case Recv:
 						for _, sender := range ent2.senders {
 							if scope_match(sender.Id, routCh.Id) {
 								s.Log(LOG_INFO, fmt.Sprintf("add bindings: %v -> %v", sender.Id, routCh.Id))
-								matches.Push(sender)
+								matches = append(matches, sender)
 							}
 						}
 					}
@@ -420,6 +428,16 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 
 	s.tblLock.Unlock()
 
+	//finished updating routing table
+	for i := 0; i < len(matches); i++ {
+		peer := matches[i]
+		if routCh.Kind == Send {
+			routCh.attach(peer)
+		} else {
+			peer.attach(routCh)
+		}
+	}
+
 	//activate
 	//force broadcaster for system ids
 	if idx >= 0 { //sys ids
@@ -428,37 +446,35 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 		routCh.start(s.dispPolicy)
 	}
 
-	//finished updating routing table
-	//start updating routedChans's binding_set
-	for i := 0; i < matches.Len(); i++ {
-		peer := matches[i].(*RoutedChan)
-		routCh.attach(peer)
-		peer.attach(routCh)
-	}
-
 	//notifier will send in a separate goroutine, so non-blocking here
 	if idx < 0 && routCh.Id.Member() == MemberLocal { //not sys ids
-		switch routCh.kind {
-		case senderType:
-			s.notifier.notifyPub(&IdChanInfo{Id: routCh.Id, ChanType: routCh.Channel.Type().(*reflect.ChanType)})
-		case recverType:
-			s.notifier.notifySub(&IdChanInfo{Id: routCh.Id, ChanType: routCh.Channel.Type().(*reflect.ChanType)})
+		switch routCh.Kind {
+		case Send:
+			s.notifier.notifyPub(&ChanInfo{Id: routCh.Id, ChanType: routCh.Channel.Type()})
+		case Recv:
+			s.notifier.notifySub(&ChanInfo{Id: routCh.Id, ChanType: routCh.Channel.Type()})
 		}
 	}
 	return
 }
 
-func (s *routerImpl) detach(routCh *RoutedChan) (err os.Error) {
-	s.Log(LOG_INFO, fmt.Sprintf("detach chan from id %v\n", routCh.Id))
+func (s *routerImpl) detach(routCh *RoutedChan, bySelf bool) (err os.Error) {
+	//s.Log(LOG_INFO, fmt.Sprintf("detach chan from id %v\n", routCh.Id))
 
 	//check id
-	if reflect.Typeof(routCh.Id) != s.idType {
+	if reflect.TypeOf(routCh.Id) != s.idType {
 		err = os.ErrorString(errIdTypeMismatch + ": " + routCh.Id.String())
 		s.LogError(err)
 		return
 	}
 
+	routerClosed := false
+
 	s.tblLock.Lock()
+
+	if s.closed {
+		routerClosed = true
+	}
 
 	//find router entry
 	ent, ok := s.routingTable[routCh.Id.Key()]
@@ -471,41 +487,62 @@ func (s *routerImpl) detach(routCh *RoutedChan) (err os.Error) {
 
 	//find the routedChan & remove it from tblEntry
 	routCh1, ok := ent.senders[routCh.Channel.Interface()]
-	if ok {
-		ent.senders[routCh.Channel.Interface()] = routCh1, false
-	} else if routCh1, ok = ent.recvers[routCh.Channel.Interface()]; ok {
-		ent.recvers[routCh.Channel.Interface()] = routCh1, false
-	} else {
-		err = os.ErrorString(errDetachChanNotInRouter + ": " + routCh.Id.String())
-		s.LogError(err)
-		s.tblLock.Unlock()
-		return
+	if !ok {
+		routCh1, ok = ent.recvers[routCh.Channel.Interface()]
 	}
 
 	s.tblLock.Unlock()
 
-	//remove bindings from peers. dup bindings to avoid race at shutdown
-	copySet := routCh1.Peers()
-	for _, v := range copySet {
-		if routCh1.kind == senderType {
-			s.Log(LOG_INFO, fmt.Sprintf("del bindings: %v -> %v", routCh1.Id, v.Id))
-		} else {
-			s.Log(LOG_INFO, fmt.Sprintf("del bindings: %v -> %v", v.Id, routCh1.Id))
-		}
-		v.detach(routCh1)
+	if !ok {
+		err = os.ErrorString(errDetachChanNotInRouter + ": " + routCh.Id.String())
+		s.LogError(err)
+		return
 	}
 
-	//close routedChan's chans, so any goroutines waiting on them will exit
-	routCh1.close()
+	//force calling router.detach() from forwarding goroutine
+	if routCh1.Kind == Send && !bySelf {
+		routCh1.Close()
+		return
+	}
+
+	s.tblLock.Lock()
+
+	if routCh1.Kind == Send {
+		ent.senders[routCh.Channel.Interface()] = routCh1, false
+	} else {
+		ent.recvers[routCh.Channel.Interface()] = routCh1, false
+	}
+
+	s.tblLock.Unlock()
+
+	//mark routCh1 to be detached
+	if routCh1.Kind == Recv {
+		routCh1.bindLock.Lock()
+		if !routCh1.detached {
+			routCh1.detached = true
+		}
+		routCh1.bindLock.Unlock()
+	}
+
+	//remove bindings from peers. dup bindings to avoid race at shutdown
+	//and detach recver from sender first
+	copySet := routCh1.Peers()
+	for _, v := range copySet {
+		if routCh1.Kind == Send {
+			routCh1.detach(v)
+		} else {
+			v.detach(routCh1)
+		}
+	}
 
 	//notifier will send in a separate goroutine, so non-blocking here
 	idx := routCh1.Id.SysIdIndex()
-	if idx < 0 && routCh.Id.Member() == MemberLocal { //not sys ids
-		switch routCh.kind {
-		case senderType:
-			s.notifier.notifyUnPub(&IdChanInfo{Id: routCh1.Id, ChanType: routCh1.Channel.Type().(*reflect.ChanType)})
-		case recverType:
-			s.notifier.notifyUnSub(&IdChanInfo{Id: routCh1.Id, ChanType: routCh1.Channel.Type().(*reflect.ChanType)})
+	if !routerClosed && idx < 0 && routCh1.Id.Member() == MemberLocal { //not sys ids
+		switch routCh1.Kind {
+		case Send:
+			s.notifier.notifyUnPub(&ChanInfo{Id: routCh1.Id, ChanType: routCh1.Channel.Type()})
+		case Recv:
+			s.notifier.notifyUnSub(&ChanInfo{Id: routCh1.Id, ChanType: routCh1.Channel.Type()})
 		}
 	}
 
@@ -516,20 +553,39 @@ func (s *routerImpl) shutdown() {
 	s.Log(LOG_INFO, "shutdown start...")
 
 	s.tblLock.Lock()
-	defer s.tblLock.Unlock()
-	s.proxLock.Lock()
-	defer s.proxLock.Unlock()
-
-	// close all peers
-	for i := 0; i < s.proxies.Len(); i++ {
-		s.proxies[i].(Proxy).Close()
+	closed := s.closed
+	if !closed {
+		s.closed = true
 	}
+	s.tblLock.Unlock()
+
+	if closed {
+		return
+	}
+
+	//s.proxLock.Lock()
+	// close all peers
+	for i := 0; i < len(s.proxies); i++ {
+		s.proxies[i].Close()
+	}
+	//s.proxLock.Unlock()
 	s.Log(LOG_INFO, "all proxy closed")
 
-	//close all enndpoint send chans
+	//detach and close all senders
+	s.tblLock.Lock()
+	var senders []*RoutedChan
 	for _, ent := range s.routingTable {
 		for _, sender := range ent.senders {
-			sender.close()
+			senders = append(senders, sender)
+			//sender.Close()
+			//sender.Detach()
+		}
+	}
+	s.tblLock.Unlock()
+	for _, snd := range senders {
+		idx := snd.Id.SysIdIndex()
+		if idx != RouterLogId && idx != RouterFaultId {
+			s.detach(snd, false)
 		}
 	}
 
@@ -538,11 +594,6 @@ func (s *routerImpl) shutdown() {
 	s.Logger.Close()
 	s.LogSink.Close()
 
-	for _, ent := range s.routingTable {
-		for _, recver := range ent.recvers {
-			recver.close()
-		}
-	}
 }
 
 func (s *routerImpl) initSysIds() {
@@ -564,7 +615,7 @@ func (s *routerImpl) recvChanBufSize(id Id) int {
 func (s *routerImpl) addProxy(p Proxy) {
 	s.Log(LOG_INFO, "add proxy")
 	s.proxLock.Lock()
-	s.proxies.Push(p)
+	s.proxies = append(s.proxies, p)
 	s.proxLock.Unlock()
 }
 
@@ -572,14 +623,15 @@ func (s *routerImpl) delProxy(p Proxy) {
 	s.Log(LOG_INFO, "del proxy impl")
 	num := -1
 	s.proxLock.Lock()
-	for i := 0; i < s.proxies.Len(); i++ {
-		if s.proxies[i].(Proxy) == p {
+	for i := 0; i < len(s.proxies); i++ {
+		if s.proxies[i] == p {
 			num = i
 			break
 		}
 	}
 	if num >= 0 {
-		s.proxies.Delete(num)
+		s.proxies[num] = nil
+		s.proxies = append(s.proxies[:num], s.proxies[num+1:]...)
 	}
 	s.proxLock.Unlock()
 }
@@ -599,19 +651,19 @@ func (r *routerImpl) ConnectRemote(rwc io.ReadWriteCloser, mar MarshalingPolicy,
 }
 
 /*
-New is router constructor. It accepts the following arguments:
-    1. seedId: a dummy id to show what type of ids will be used. New ids will be type-checked against this.
-    2. bufSize: the buffer size used for router's internal channels.
-           if bufSize >= 0, its value will be used
-           if bufSize < 0, it means unlimited buffering, so router is async and sending on 
-                                attached channels will never block
-    3. disp: dispatch policy for router. by default, it is BroadcastPolicy
-    4. optional arguments ...:
-            name:     router's name, if name is defined, router internal logging will be turned on,
-                      ie LogRecord generated
-            LogScope: if this is set, a console log sink is installed to show router internal log
-                      if logScope == ScopeLocal, only log msgs from local router will show up
-                      if logScope == ScopeGlobal, all log msgs from connected routers will show up
+ New is router constructor. It accepts the following arguments:
+ 1. seedId: a dummy id to show what type of ids will be used. New ids will be type-checked against this.
+ 2. bufSize: the buffer size used for router's internal channels.
+ if bufSize >= 0, its value will be used
+ if bufSize < 0, it means unlimited buffering, so router is async and sending on 
+ attached channels will never block
+ 3. disp: dispatch policy for router. by default, it is BroadcastPolicy
+ 4. optional arguments ...:
+ name:     router's name, if name is defined, router internal logging will be turned on,
+ ie LogRecord generated
+ LogScope: if this is set, a console log sink is installed to show router internal log
+ if logScope == ScopeLocal, only log msgs from local router will show up
+ if logScope == ScopeGlobal, all log msgs from connected routers will show up
 */
 func New(seedId Id, bufSize int, disp DispatchPolicy, args ...interface{}) Router {
 	//parse optional router name and flag for enable console logging
@@ -639,7 +691,7 @@ func New(seedId Id, bufSize int, disp DispatchPolicy, args ...interface{}) Route
 	router := &routerImpl{}
 	router.name = name
 	router.seedId = seedId
-	router.idType = reflect.Typeof(router.seedId)
+	router.idType = reflect.TypeOf(router.seedId)
 	router.matchType = router.seedId.MatchType()
 	router.initSysIds()
 	router.defChanBufSize = DefDataChanBufSize

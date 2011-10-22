@@ -113,7 +113,7 @@ func TestRemoteConn(t *testing.T) {
 	go func() {
 		addr := <-listening // wait for server to start
 		dialaddr := "127.0.0.1" + addr[strings.LastIndex(addr, ":"):]
-		conn, err := net.Dial("tcp", "", dialaddr)
+		conn, err := net.Dial("tcp", dialaddr)
 		if err != nil {
 			t.Fatal(err)
 		}

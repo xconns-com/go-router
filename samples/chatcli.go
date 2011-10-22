@@ -53,8 +53,8 @@ func (c *Chatter) Join(s string) {
 	//start reading/recving subject msgs
 	go func() {
 		for {
-			msg := <-subj.recvChan
-			if closed(subj.recvChan) {
+			msg, chOpen := <-subj.recvChan
+			if !chOpen {
 				break
 			}
 			fmt.Printf("recv: [%s]\n", msg)
@@ -92,13 +92,13 @@ func main() {
 	srvPort := flag.Arg(2)
 
 	dialaddr := srvName + ":" + srvPort
-	conn, err := net.Dial("tcp", "", dialaddr)
+	conn, err := net.Dial("tcp", dialaddr)
 	if err != nil {
 		fmt.Println(err)
 	}
 	fmt.Println("client connect")
 
-	rot := router.New(router.StrID(), 32, router.BroadcastPolicy /* , "client", router.ScopeLocal*/ )
+	rot := router.New(router.StrID(), 32, router.BroadcastPolicy, "client", router.ScopeLocal)
 	_, err = rot.ConnectRemote(conn, router.JsonMarshaling)
 	if err != nil {
 		fmt.Println(err)
