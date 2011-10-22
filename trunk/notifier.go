@@ -10,89 +10,112 @@ import (
 	"fmt"
 )
 
-type notifyChansPerScope struct {
-	chans   [4]chan *IdChanInfoMsg
-	routChs [4]*RoutedChan
+type notifyChan struct {
+	nchan  chan *ChanInfoMsg
+	routCh *RoutedChan
 }
 
-func (n *notifyChansPerScope) Close(scope int, member int, r *routerImpl) {
-	for i := 0; i < 4; i++ {
-		if n.chans[i] != nil {
-			close(n.chans[i])
-			//r.DetachChan(r.NewSysID(PubId+i, scope, member), n.chans[i]);
-		}
-	}
+func (n *notifyChan) Close() {
+	n.routCh.Detach()
 }
 
-func newNotifyChansPerScope(scope int, member int, r *routerImpl) *notifyChansPerScope {
-	nc := new(notifyChansPerScope)
-	for i := 0; i < 4; i++ {
-		nc.chans[i] = make(chan *IdChanInfoMsg, r.defChanBufSize)
-		nc.routChs[i], _ = r.AttachSendChan(r.NewSysID(PubId+i, scope, member), nc.chans[i])
-	}
+func newNotifyChan(idx int, r *routerImpl) *notifyChan {
+	nc := new(notifyChan)
+	nc.nchan = make(chan *ChanInfoMsg, r.defChanBufSize)
+	nc.routCh, _ = r.AttachSendChan(r.NewSysID(idx, ScopeGlobal, MemberLocal), nc.nchan)
 	return nc
 }
 
 type notifier struct {
 	router      *routerImpl
-	notifyChans [NumScope]*notifyChansPerScope
+	notifyChans [4]*notifyChan
 }
 
 func newNotifier(s *routerImpl) *notifier {
 	n := new(notifier)
 	n.router = s
-	for i := 0; i < int(NumScope); i++ {
-		n.notifyChans[i] = newNotifyChansPerScope(i, MemberLocal, n.router)
+	for i := 0; i < 4; i++ {
+		n.notifyChans[i] = newNotifyChan(PubId+i, s)
 	}
 	return n
 }
 
 func (n *notifier) Close() {
-	for i := 0; i < int(NumScope); i++ {
-		n.notifyChans[i].Close(i, MemberLocal, n.router)
+	for i := 0; i < 4; i++ {
+		n.notifyChans[i].Close()
 	}
 }
 
-func (n notifier) notifyPub(info *IdChanInfo) {
+func (n notifier) notifyPub(info *ChanInfo) {
 	n.router.Log(LOG_INFO, fmt.Sprintf("notifyPub: %v", info.Id))
-	nc := n.notifyChans[info.Id.Scope()]
-	if nc.routChs[0].NumPeers() > 0 {
-		ok := nc.chans[0] <- &IdChanInfoMsg{Info: []*IdChanInfo{info}}
-		if !ok {
-			go func() { nc.chans[0] <- &IdChanInfoMsg{Info: []*IdChanInfo{info}} }()
+	nc := n.notifyChans[0]
+	if nc.routCh.NumPeers() > 0 {
+		select {
+		case nc.nchan <- &ChanInfoMsg{Info: []*ChanInfo{info}}:
+		default:
+			go func() {
+				//async sending sys notif could fail during router closing
+				//when notif chans could be closed while some notifier 
+				//goroutines hang on
+				defer func() {
+					_ = recover()
+				}()
+				nc.nchan <- &ChanInfoMsg{Info: []*ChanInfo{info}}
+			}()
 		}
 	}
 }
 
-func (n notifier) notifyUnPub(info *IdChanInfo) {
+func (n notifier) notifyUnPub(info *ChanInfo) {
 	n.router.Log(LOG_INFO, fmt.Sprintf("notifyUnPub: %v", info.Id))
-	nc := n.notifyChans[info.Id.Scope()]
-	if nc.routChs[1].NumPeers() > 0 {
-		ok := nc.chans[1] <- &IdChanInfoMsg{Info: []*IdChanInfo{info}}
-		if !ok {
-			go func() { nc.chans[1] <- &IdChanInfoMsg{Info: []*IdChanInfo{info}} }()
+	nc := n.notifyChans[1]
+	if nc.routCh.NumPeers() > 0 {
+		select {
+		case nc.nchan <- &ChanInfoMsg{Info: []*ChanInfo{info}}:
+		default:
+			go func() {
+				//async sending sys notif could fail during router closing
+				defer func() {
+					_ = recover()
+				}()
+				nc.nchan <- &ChanInfoMsg{Info: []*ChanInfo{info}}
+			}()
 		}
 	}
 }
 
-func (n notifier) notifySub(info *IdChanInfo) {
+func (n notifier) notifySub(info *ChanInfo) {
 	n.router.Log(LOG_INFO, fmt.Sprintf("notifySub: %v", info.Id))
-	nc := n.notifyChans[info.Id.Scope()]
-	if nc.routChs[2].NumPeers() > 0 {
-		ok := nc.chans[2] <- &IdChanInfoMsg{Info: []*IdChanInfo{info}}
-		if !ok {
-			go func() { nc.chans[2] <- &IdChanInfoMsg{Info: []*IdChanInfo{info}} }()
+	nc := n.notifyChans[2]
+	if nc.routCh.NumPeers() > 0 {
+		select {
+		case nc.nchan <- &ChanInfoMsg{Info: []*ChanInfo{info}}:
+		default:
+			go func() {
+				//async sending sys notif could fail during router closing
+				defer func() {
+					_ = recover()
+				}()
+				nc.nchan <- &ChanInfoMsg{Info: []*ChanInfo{info}}
+			}()
 		}
 	}
 }
 
-func (n notifier) notifyUnSub(info *IdChanInfo) {
+func (n notifier) notifyUnSub(info *ChanInfo) {
 	n.router.Log(LOG_INFO, fmt.Sprintf("notifyUnSub: %v", info.Id))
-	nc := n.notifyChans[info.Id.Scope()]
-	if nc.routChs[3].NumPeers() > 0 {
-		ok := nc.chans[3] <- &IdChanInfoMsg{Info: []*IdChanInfo{info}}
-		if !ok {
-			go func() { nc.chans[3] <- &IdChanInfoMsg{Info: []*IdChanInfo{info}} }()
+	nc := n.notifyChans[3]
+	if nc.routCh.NumPeers() > 0 {
+		select {
+		case nc.nchan <- &ChanInfoMsg{Info: []*ChanInfo{info}}:
+		default:
+			go func() {
+				//async sending sys notif could fail during router closing
+				defer func() {
+					_ = recover()
+				}()
+				nc.nchan <- &ChanInfoMsg{Info: []*ChanInfo{info}}
+			}()
 		}
 	}
 }

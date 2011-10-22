@@ -167,7 +167,7 @@ func test_notification() {
 	rout := router.New(router.StrID(), 32, router.BroadcastPolicy)
 	chi1 := make(chan string)
 	chi2 := make(chan string)
-	chiN := make(chan *router.IdChanInfoMsg)
+	chiN := make(chan *router.ChanInfoMsg)
 	cho := make(chan string)
 	bound := make(chan *router.BindEvent, 1)
 	done := make(chan bool)
@@ -229,7 +229,7 @@ func test_local_conn() {
 	chi1 := make(chan string)
 	chi2 := make(chan string)
 	chi3 := make(chan string)
-	chiN := make(chan *router.IdChanInfoMsg)
+	chiN := make(chan *router.ChanInfoMsg)
 	cho := make(chan string)
 	done := make(chan bool)
 	bound := make(chan *router.BindEvent, 1)
@@ -305,7 +305,7 @@ func test_logger() {
 	chi1 := make(chan string)
 	chi2 := make(chan string)
 	chi3 := make(chan string)
-	chiN := make(chan *router.IdChanInfoMsg)
+	chiN := make(chan *router.ChanInfoMsg)
 	cho := make(chan string)
 	done := make(chan bool)
 	bound := make(chan *router.BindEvent, 1)
@@ -431,7 +431,7 @@ func test_remote_conn() {
 	go func() {
 		addr := <-listening // wait for server to start
 		dialaddr := "127.0.0.1" + addr[strings.LastIndex(addr, ":"):]
-		conn, err := net.Dial("tcp", "", dialaddr)
+		conn, err := net.Dial("tcp", dialaddr)
 		if err != nil {
 			fmt.Println(err)
 		}

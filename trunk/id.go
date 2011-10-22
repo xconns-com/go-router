@@ -85,14 +85,14 @@ type Id interface {
 
 //Indices for sys msgs, used for creating SysIds
 const (
-	ConnId = iota
-	DisconnId
-	ErrorId
-	ReadyId
-	PubId
-	UnPubId
-	SubId
-	UnSubId
+	ConnId    = iota //msgs for router connection
+	DisconnId        //msgs for router disconnection
+	ErrorId          //msgs sent when one side detect errors
+	ReadyId          //msgs sent when router's chans ready to send msgs
+	PubId            //send new publications (set<id, chan type info>)
+	UnPubId          //remove publications from connected routers
+	SubId            //send new subscriptions (set<id, chan type info>)
+	UnSubId          //remove subscriptions from connected routers
 	NumSysIds
 )
 
@@ -574,7 +574,7 @@ var scope_check_table [][]int = [][]int{
 
 //validate the src and dest scope matches
 func scope_match(src, dst Id) bool {
-	src_row := int(src.Member())*int(NumScope) + int(src.Scope())
-	dst_col := int(dst.Member())*int(NumScope) + int(dst.Scope())
+	src_row := src.Member()*NumScope + src.Scope()
+	dst_col := dst.Member()*NumScope + dst.Scope()
 	return scope_check_table[src_row][dst_col] == 1
 }

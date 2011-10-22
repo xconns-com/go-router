@@ -56,13 +56,13 @@ func (rcb *recvChanBundle) BindingCount(id Id) int {
 	return r.routCh.NumPeers()
 }
 
-func (rcb *recvChanBundle) AllRecverInfo() []*IdChanInfo {
-	info := make([]*IdChanInfo, len(rcb.recvChans))
+func (rcb *recvChanBundle) AllRecverInfo() []*ChanInfo {
+	info := make([]*ChanInfo, len(rcb.recvChans))
 	num := 0
 	for _, v := range rcb.recvChans {
-		ici := &IdChanInfo{}
+		ici := &ChanInfo{}
 		ici.Id = v.id
-		ici.ChanType = v.ch.Type().(*reflect.ChanType)
+		ici.ChanType = v.ch.Type()
 		info[num] = ici
 		num++
 	}
@@ -155,18 +155,18 @@ func (scb *sendChanBundle) findSender(id Id) (Channel, int) {
 	if !ok {
 		return nil, 0
 	}
-	return s.ch, s.routCh.NumPeers()
+	return s.routCh, s.routCh.NumPeers()
 }
 
-func (scb *sendChanBundle) AllSenderInfo() []*IdChanInfo {
+func (scb *sendChanBundle) AllSenderInfo() []*ChanInfo {
 	scb.Lock()
 	defer scb.Unlock()
-	info := make([]*IdChanInfo, len(scb.sendChans))
+	info := make([]*ChanInfo, len(scb.sendChans))
 	num := 0
 	for _, v := range scb.sendChans {
-		ici := &IdChanInfo{}
+		ici := &ChanInfo{}
 		ici.Id = v.id
-		ici.ChanType = v.ch.Type().(*reflect.ChanType)
+		ici.ChanType = v.ch.Type()
 		info[num] = ici
 		num++
 	}
@@ -183,7 +183,7 @@ func (scb *sendChanBundle) BindingCount(id Id) int {
 	return s.routCh.NumPeers()
 }
 
-func (scb *sendChanBundle) AddSender(id Id, chanType *reflect.ChanType) (err os.Error) {
+func (scb *sendChanBundle) AddSender(id Id, chanType reflect.Type) (err os.Error) {
 	scb.Lock()
 	_, ok := scb.sendChans[id.Key()]
 	scb.Unlock()
@@ -236,19 +236,17 @@ func (scb *sendChanBundle) DelSender(id Id) os.Error {
 	if err != nil {
 		scb.router.LogError(err)
 	}
-	s.ch.Close()
 	return nil
 }
 
 func (scb *sendChanBundle) Close() {
 	scb.Lock()
+	defer scb.Unlock()
 	for k, s := range scb.sendChans {
 		scb.sendChans[k] = s, false
 		err := scb.router.DetachChan(s.id, s.ch.Interface())
 		if err != nil {
 			scb.router.LogError(err)
 		}
-		s.ch.Close()
 	}
-	scb.Unlock()
 }

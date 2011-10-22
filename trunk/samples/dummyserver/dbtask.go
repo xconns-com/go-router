@@ -57,14 +57,14 @@ func (dt *DbTask) Run(r router.Router, sn string, role ServantRole) {
 	cont := true
 	for cont {
 		select {
-		case cmd := <-dt.sysCmdChan:
-			if !closed(dt.sysCmdChan) {
+		case cmd, cmdOpen := <-dt.sysCmdChan:
+			if cmdOpen {
 				cont = dt.handleCmd(cmd)
 			} else {
 				cont = false
 			}
-		case req := <-dt.dbReqChan:
-			if !closed(dt.dbReqChan) {
+		case req, dbOpen := <-dt.dbReqChan:
+			if dbOpen {
 				dt.handleDbReq(req)
 			} else {
 				cont = false

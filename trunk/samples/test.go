@@ -168,7 +168,7 @@ func test_notification() {
 	rout := router.New(router.StrID(), 32, router.BroadcastPolicy)
 	chi1 := make(chan string)
 	chi2 := make(chan string)
-	chiN := make(chan *router.IdChanInfoMsg)
+	chiN := make(chan *router.ChanInfoMsg)
 	cho := make(chan string)
 	bound := make(chan *router.BindEvent, 1)
 	done := make(chan bool)
@@ -230,7 +230,7 @@ func test_local_conn() {
 	chi1 := make(chan string)
 	chi2 := make(chan string)
 	chi3 := make(chan string)
-	chiN := make(chan *router.IdChanInfoMsg)
+	chiN := make(chan *router.ChanInfoMsg)
 	cho := make(chan string)
 	done := make(chan bool)
 	bound := make(chan *router.BindEvent, 1)
@@ -295,6 +295,8 @@ func test_local_conn() {
 	<-done
 	<-done
 	<-done
+	//wait for printouts
+	//time.Sleep(1e9)
 	rout1.Close()
 	rout2.Close()
 }
@@ -306,7 +308,7 @@ func test_logger() {
 	chi1 := make(chan string)
 	chi2 := make(chan string)
 	chi3 := make(chan string)
-	chiN := make(chan *router.IdChanInfoMsg)
+	chiN := make(chan *router.ChanInfoMsg)
 	cho := make(chan string)
 	done := make(chan bool)
 	bound := make(chan *router.BindEvent, 1)
@@ -390,7 +392,7 @@ func test_remote_conn() {
 		fmt.Println("server start")
 		//
 		rout1 := router.New(router.IntID(), 32, router.BroadcastPolicy /* , "router1", router.ScopeLocal*/ )
-		_, err = rout1.ConnectRemote(conn, router.GobMarshaling)
+		_, err = rout1.ConnectRemote(conn, router.JsonMarshaling)
 		if err != nil {
 			fmt.Println(err)
 		} else {
@@ -432,14 +434,14 @@ func test_remote_conn() {
 	go func() {
 		addr := <-listening // wait for server to start
 		dialaddr := "127.0.0.1" + addr[strings.LastIndex(addr, ":"):]
-		conn, err := net.Dial("tcp", "", dialaddr)
+		conn, err := net.Dial("tcp", dialaddr)
 		if err != nil {
 			fmt.Println(err)
 		}
 		fmt.Println("client connect")
 		//
 		rout2 := router.New(router.IntID(), 32, router.BroadcastPolicy /* , "router2", router.ScopeLocal*/ )
-		_, err = rout2.ConnectRemote(conn, router.GobMarshaling)
+		_, err = rout2.ConnectRemote(conn, router.JsonMarshaling)
 		if err != nil {
 			fmt.Println(err)
 		} else {
@@ -576,7 +578,7 @@ func test_flow_control() {
 	go func() {
 		addr := <-listening // wait for server to start
 		dialaddr := "127.0.0.1" + addr[strings.LastIndex(addr, ":"):]
-		conn, err := net.Dial("tcp", "", dialaddr)
+		conn, err := net.Dial("tcp", dialaddr)
 		if err != nil {
 			fmt.Println(err)
 		}
@@ -639,8 +641,10 @@ func main() {
 	test_remote_conn()
 	fmt.Println("-------test_async_router-------")
 	test_async_router()
-	fmt.Println("-------test_flow_control (internal buffer size = 5)-------")
-	test_flow_control()
+	/*
+		fmt.Println("-------test_flow_control (internal buffer size = 5)-------")
+		test_flow_control()
+	*/
 	/*
 		fmt.Println("-------test_logger-------")
 		test_logger()

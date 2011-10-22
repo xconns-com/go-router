@@ -28,15 +28,15 @@ func main() {
 	svcName := flag.Arg(0)
 	numRuns, _ := strconv.Atoi(flag.Arg(1))
 
-	conn1, _ := net.Dial("unix", "", ServantAddr1)
+	conn1, _ := net.Dial("unix", ServantAddr1)
 	fmt.Println("conn to servant1 up")
-	conn2, _ := net.Dial("unix", "", ServantAddr2)
+	conn2, _ := net.Dial("unix", ServantAddr2)
 	fmt.Println("conn to servant2 up")
 
 	//create router and connect it to both active and standby servants
-	rot := router.New(router.StrID(), 32, router.BroadcastPolicy)
-	proxy1 := router.NewProxy(rot, "", nil, nil)
-	proxy2 := router.NewProxy(rot, "", nil, nil)
+	rot := router.New(router.StrID(), 32, router.BroadcastPolicy /* , "cli", router.ScopeLocal*/ )
+	proxy1 := router.NewProxy(rot, "proxy1", nil, nil)
+	proxy2 := router.NewProxy(rot, "proxy2", nil, nil)
 	proxy1.ConnectRemote(conn1, router.GobMarshaling, router.FlowControl)
 	proxy2.ConnectRemote(conn2, router.GobMarshaling, router.FlowControl)
 
@@ -56,19 +56,19 @@ func main() {
 		req := fmt.Sprintf("request %d", i)
 		fmt.Printf("client sent request [%s] to serivce [%s]\n", req, svcName)
 		reqChan <- req
-		ticker := time.NewTicker(6e8) //the wait for response will time out in less than 1 sec
+		timer := time.NewTimer(6e8) //the wait for response will time out in less than 1 sec
 		select {
-		case rsp := <-rspChan:
-			if closed(reqChan) || closed(rspChan) {
+		case rsp, chOpen := <-rspChan:
+			if !chOpen {
 				cont = false
 			} else {
 				fmt.Printf("client recv response ( %s )\n", rsp)
 			}
-		case <-ticker.C:
+		case <-timer.C:
 			fmt.Printf("time out for reqest [%s]\n", req)
 			i-- //resend it
 		}
-		ticker.Stop()
+		timer.Stop()
 	}
 	fmt.Printf("client exit\n")
 	conn1.Close()

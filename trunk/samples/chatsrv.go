@@ -32,12 +32,12 @@ func main() {
 
 	subjMap := make(map[string]*Subject)
 
-	rot := router.New(router.StrID(), 32, router.BroadcastPolicy /*, "chatsrv", router.ScopeLocal*/ )
+	rot := router.New(router.StrID(), 32, router.BroadcastPolicy, "chatsrv", router.ScopeLocal)
 
 	//start server mainloop in a separate goroutine, and recv client conn in main goroutine
 	go func() {
 		//subscribe to remote publications, so learn what subjects are created
-		pubChan := make(chan *router.IdChanInfoMsg)
+		pubChan := make(chan *router.ChanInfoMsg)
 		//attach a recv chan with a "chan BindEvent"
 		//this recv chan will not be closed when all senders detach
 		bindChan := make(chan *router.BindEvent, 1)
