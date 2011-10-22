@@ -195,7 +195,6 @@ func (ac *asyncChan) TrySend(v reflect.Value) bool {
 	return true
 }
 
-
 /*
  flowChan: flow controlled channel
  . a pair of <Sender, Recver>
@@ -215,13 +214,13 @@ func newFlowChanSender(ch Channel, credit int) (*flowChanSender, os.Error) {
 	fc := new(flowChanSender)
 	fc.Channel = ch
 	if credit <= 0 {
-		return nil, os.ErrorString("Flow Controlled Chan: invalid credit")
+		return nil, os.NewError("Flow Controlled Chan: invalid credit")
 	}
 	fc.credit = credit
 	fc.creditCap = credit
 	//for unlimited buffer, ch.Cap() return UnlimitedBuffer(-1)
 	if ch.Cap() != UnlimitedBuffer && ch.Cap() < credit {
-		return nil, os.ErrorString("Flow Controlled Chan: do not have enough buffering")
+		return nil, os.NewError("Flow Controlled Chan: do not have enough buffering")
 	}
 	fc.creditChan = make(chan bool, 1)
 	fc.creditChan <- true //since we have credit, turn on creditChan
@@ -288,7 +287,6 @@ func (fc *flowChanSender) ack(n int) {
 func (fc *flowChanSender) Interface() interface{} {
 	return fc
 }
-
 
 type flowChanRecver struct {
 	Channel

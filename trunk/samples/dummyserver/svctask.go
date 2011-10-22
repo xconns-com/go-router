@@ -46,7 +46,6 @@ type ServiceTask struct {
 	numTrans    int //how many requests have been handled
 	role        ServantRole
 	random      *rand.Rand //for generating fake db requests and fake fault report
-	bindChan    chan *router.BindEvent
 }
 
 func NewServiceTask(r router.Router, sn string, n string, role ServantRole) *ServiceTask {
@@ -102,13 +101,6 @@ func (at *ServiceTask) Run(r router.Router, sn string, n string, role ServantRol
 				//cont = false
 				svcCmdChan = nil
 			}
-			/*
-				case be := <-at.bindChan:
-					if be.Count == 0 { //peer exit
-						fmt.Println("App task [", at.name, "] at [", at.servantName, "] exit5")
-						cont = false
-					}
-			*/
 		}
 	}
 	//shutdown phase
@@ -128,7 +120,6 @@ func (at *ServiceTask) init(r router.Router, sn string, n string, role ServantRo
 	at.sysCmdChan = make(chan string)
 	at.svcCmdChan = make(chan string)
 	at.dbRespChan = make(chan string)
-	at.bindChan = make(chan *router.BindEvent, 1)
 	svcname := "/App/" + at.name
 	//output_intf or send chans
 	at.FaultRaiser = router.NewFaultRaiser(router.StrID("/Fault/AppService/Exception"), at.rot, at.name)
@@ -153,7 +144,7 @@ func (at *ServiceTask) init(r router.Router, sn string, n string, role ServantRo
 	if err != nil {
 		fmt.Println(sn, " failed to attach svcname+/DB/Response")
 	}
-	_, err = at.rot.AttachRecvChan(router.StrID(svcname+"/Request"), at.svcReqChan, at.bindChan)
+	_, err = at.rot.AttachRecvChan(router.StrID(svcname+"/Request"), at.svcReqChan)
 	if err != nil {
 		fmt.Println(sn, " failed to attach svcname+/Request")
 	}
@@ -235,7 +226,7 @@ func (at *ServiceTask) handleSvcReq(req string) {
 	if at.numTrans > 3 {
 		r = at.random.Intn(1024)
 		if r == 99 {
-			at.Raise(os.ErrorString("app service got an error"))
+			at.Raise(os.NewError("app service got an error"))
 		}
 	}
 }

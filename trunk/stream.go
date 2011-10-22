@@ -240,7 +240,7 @@ func (s *stream) recv() (err os.Error) {
 		}
 		chanType := s.proxy.getExportRecvChanType(id)
 		if chanType == nil {
-			err = os.ErrorString(fmt.Sprintf("failed to find chanType for id %v", id))
+			err = os.NewError(fmt.Sprintf("failed to find chanType for id %v", id))
 			return
 		}
 		appMsg := reflect.New(chanType.Elem())

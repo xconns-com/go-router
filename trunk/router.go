@@ -170,7 +170,7 @@ func (s *routerImpl) IdsForRecv(predicate func(id Id) bool) map[interface{}]*Cha
 func (s *routerImpl) validateId(id Id) (err os.Error) {
 	if id == nil || (id.Scope() < ScopeGlobal || id.Scope() > ScopeLocal) ||
 		(id.Member() < MemberLocal || id.Member() > MemberRemote) {
-		err = os.ErrorString(fmt.Sprintf("%s: %v", errInvalidId, id))
+		err = os.NewError(fmt.Sprintf("%s: %v", errInvalidId, id))
 	}
 	return
 }
@@ -185,7 +185,7 @@ func (s *routerImpl) AttachSendChan(id Id, v interface{}, args ...interface{}) (
 	if !internalChan {
 		ch1 := reflect.ValueOf(v)
 		if ch1.Kind() != reflect.Chan {
-			err = os.ErrorString(errInvalidChan)
+			err = os.NewError(errInvalidChan)
 			s.LogError(err)
 			s.Raise(err)
 			return
@@ -199,13 +199,13 @@ func (s *routerImpl) AttachSendChan(id Id, v interface{}, args ...interface{}) (
 		case chan *BindEvent:
 			bindChan = cv
 			if cap(bindChan) == 0 {
-				err = os.ErrorString(errInvalidBindChan + ": binding bindChan is not buffered")
+				err = os.NewError(errInvalidBindChan + ": binding bindChan is not buffered")
 				s.LogError(err)
 				s.Raise(err)
 				return
 			}
 		default:
-			err = os.ErrorString("invalid arguments to attach send chan")
+			err = os.NewError("invalid arguments to attach send chan")
 			s.LogError(err)
 			s.Raise(err)
 			return
@@ -231,7 +231,7 @@ func (s *routerImpl) AttachRecvChan(id Id, v interface{}, args ...interface{}) (
 	if !internalChan {
 		ch1 := reflect.ValueOf(v)
 		if ch1.Kind() != reflect.Chan {
-			err = os.ErrorString(errInvalidChan)
+			err = os.NewError(errInvalidChan)
 			s.LogError(err)
 			s.Raise(err)
 			return
@@ -244,7 +244,7 @@ func (s *routerImpl) AttachRecvChan(id Id, v interface{}, args ...interface{}) (
 		case chan *BindEvent:
 			bindChan = cv
 			if cap(bindChan) == 0 {
-				err = os.ErrorString(errInvalidBindChan + ": binding bindChan is not buffered")
+				err = os.NewError(errInvalidBindChan + ": binding bindChan is not buffered")
 				s.LogError(err)
 				s.Raise(err)
 				return
@@ -258,7 +258,7 @@ func (s *routerImpl) AttachRecvChan(id Id, v interface{}, args ...interface{}) (
 			}
 			s.bufSizeLock.Unlock()
 		default:
-			err = os.ErrorString("invalid arguments to attach recv chan")
+			err = os.NewError("invalid arguments to attach recv chan")
 			s.LogError(err)
 			s.Raise(err)
 			return
@@ -290,7 +290,7 @@ func (s *routerImpl) DetachChan(id Id, v interface{}) (err os.Error) {
 	if !ok {
 		ch1 := reflect.ValueOf(v)
 		if ch1.Kind() != reflect.Chan {
-			err = os.ErrorString(errInvalidChan)
+			err = os.NewError(errInvalidChan)
 			s.LogError(err)
 			s.Raise(err)
 			return
@@ -313,7 +313,7 @@ func (s *routerImpl) Close() {
 func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 	//handle id
 	if reflect.TypeOf(routCh.Id) != s.idType {
-		err = os.ErrorString(errIdTypeMismatch + ": " + routCh.Id.String())
+		err = os.NewError(errIdTypeMismatch + ": " + routCh.Id.String())
 		s.LogError(err)
 		return
 	}
@@ -321,7 +321,7 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 	s.tblLock.Lock()
 
 	if s.closed {
-		err = os.ErrorString(fmt.Sprintf("Router closed, cannot attach chan for id %v", routCh.Id))
+		err = os.NewError(fmt.Sprintf("Router closed, cannot attach chan for id %v", routCh.Id))
 		s.LogError(err)
 		s.tblLock.Unlock()
 		return
@@ -331,7 +331,7 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 	ent, ok := s.routingTable[routCh.Id.Key()]
 	if !ok {
 		if routCh.internalChan {
-			err = os.ErrorString(fmt.Sprintf("%s %v", errChanGenericType, routCh.Id))
+			err = os.NewError(fmt.Sprintf("%s %v", errChanGenericType, routCh.Id))
 			s.LogError(err)
 			s.tblLock.Unlock()
 			return
@@ -345,7 +345,7 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 		ent.recvers = make(map[interface{}]*RoutedChan)
 	} else {
 		if !routCh.internalChan && routCh.Channel.Type() != ent.chanType {
-			err = os.ErrorString(fmt.Sprintf("%s %v", errChanTypeMismatch, routCh.Id))
+			err = os.NewError(fmt.Sprintf("%s %v", errChanTypeMismatch, routCh.Id))
 			s.LogError(err)
 			s.tblLock.Unlock()
 			return
@@ -356,7 +356,7 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 	switch routCh.Kind {
 	case Send:
 		if _, ok = ent.senders[routCh.Channel.Interface()]; ok {
-			err = os.ErrorString(errDupAttachment)
+			err = os.NewError(errDupAttachment)
 			s.LogError(err)
 			s.tblLock.Unlock()
 			return
@@ -365,7 +365,7 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 		}
 	case Recv:
 		if _, ok = ent.recvers[routCh.Channel.Interface()]; ok {
-			err = os.ErrorString(errDupAttachment)
+			err = os.NewError(errDupAttachment)
 			s.LogError(err)
 			s.tblLock.Unlock()
 			return
@@ -417,7 +417,7 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 						}
 					}
 				} else {
-					em := os.ErrorString(fmt.Sprintf("%s : [%v, %v]", errChanTypeMismatch, routCh.Id, ent2.id))
+					em := os.NewError(fmt.Sprintf("%s : [%v, %v]", errChanTypeMismatch, routCh.Id, ent2.id))
 					s.Log(LOG_ERROR, em)
 					//should crash here?
 					s.Raise(em)
@@ -463,7 +463,7 @@ func (s *routerImpl) detach(routCh *RoutedChan, bySelf bool) (err os.Error) {
 
 	//check id
 	if reflect.TypeOf(routCh.Id) != s.idType {
-		err = os.ErrorString(errIdTypeMismatch + ": " + routCh.Id.String())
+		err = os.NewError(errIdTypeMismatch + ": " + routCh.Id.String())
 		s.LogError(err)
 		return
 	}
@@ -479,7 +479,7 @@ func (s *routerImpl) detach(routCh *RoutedChan, bySelf bool) (err os.Error) {
 	//find router entry
 	ent, ok := s.routingTable[routCh.Id.Key()]
 	if !ok {
-		err = os.ErrorString(errDetachChanNotInRouter + ": " + routCh.Id.String())
+		err = os.NewError(errDetachChanNotInRouter + ": " + routCh.Id.String())
 		s.LogError(err)
 		s.tblLock.Unlock()
 		return
@@ -494,7 +494,7 @@ func (s *routerImpl) detach(routCh *RoutedChan, bySelf bool) (err os.Error) {
 	s.tblLock.Unlock()
 
 	if !ok {
-		err = os.ErrorString(errDetachChanNotInRouter + ": " + routCh.Id.String())
+		err = os.NewError(errDetachChanNotInRouter + ": " + routCh.Id.String())
 		s.LogError(err)
 		return
 	}
