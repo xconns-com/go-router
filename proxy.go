@@ -209,7 +209,7 @@ func (p *proxyImpl) connSetup() os.Error {
 		p.sysChans.SendConnInfo(ConnId, ci)
 		//check type info
 		if reflect.TypeOf(ci.Id) != reflect.TypeOf(r.seedId) || ci.Type != p.connType() {
-			err := os.ErrorString(errRouterTypeMismatch)
+			err := os.NewError(errRouterTypeMismatch)
 			ci.Error = err.String()
 			//tell local listeners about the fail
 			p.sysChans.SendConnInfo(ErrorId, ci)
@@ -219,7 +219,7 @@ func (p *proxyImpl) connSetup() os.Error {
 			return err
 		}
 	default:
-		err := os.ErrorString(errConnInvalidMsg)
+		err := os.NewError(errConnInvalidMsg)
 		//tell peer about fail
 		p.peer.sendCtrlMsg(&genericMsg{r.SysID(ErrorId), &ConnInfoMsg{Error: err.String()}})
 		p.LogError(err)
@@ -236,7 +236,7 @@ func (p *proxyImpl) connSetup() os.Error {
 		case ErrorId:
 			ci := m.Data.(*ConnInfoMsg)
 			p.sysChans.SendConnInfo(ErrorId, ci)
-			ee := os.ErrorString(ci.Error)
+			ee := os.NewError(ci.Error)
 			p.LogError(ee)
 			return ee
 		case ReadyId:
@@ -278,7 +278,7 @@ func (p *proxyImpl) connSetup() os.Error {
 			//tell peer i am ready by sending an empty ConnReadyMsg
 			p.peer.sendCtrlMsg(&genericMsg{r.SysID(ReadyId), &ConnReadyMsg{}})
 		default:
-			err := os.ErrorString(errConnInvalidMsg)
+			err := os.NewError(errConnInvalidMsg)
 			p.Log(LOG_INFO, "recv invalid")
 			//tell peer about fail
 			p.peer.sendCtrlMsg(&genericMsg{r.SysID(ErrorId), &ConnInfoMsg{Error: err.String()}})
@@ -377,7 +377,7 @@ func (p *proxyImpl) handlePeerCtrlMsg(m *genericMsg) (err os.Error) {
 	case ErrorId:
 		ci := m.Data.(*ConnInfoMsg)
 		p.sysChans.SendConnInfo(ErrorId, ci)
-		p.LogError(os.ErrorString(ci.Error))
+		p.LogError(os.NewError(ci.Error))
 		p.closeImpl()
 		return
 	case ReadyId:
@@ -406,7 +406,6 @@ func (p *proxyImpl) handlePeerCtrlMsg(m *genericMsg) (err os.Error) {
 	}
 	return
 }
-
 
 //the following 2 functions are external interface exposed to peers
 func (p *proxyImpl) sendCtrlMsg(m *genericMsg) (err os.Error) {
@@ -522,7 +521,7 @@ func (p *proxyImpl) handleLocalSubMsg(m *genericMsg) (num int, err os.Error) {
 					p.Log(LOG_INFO, fmt.Sprintf("send ConnReady for: %v", pub.Id))
 					p.appSendChans.AddSender(pub.Id, pub.ChanType)
 				} else {
-					err = os.ErrorString(errRmtChanTypeMismatch)
+					err = os.NewError(errRmtChanTypeMismatch)
 					p.sysChans.SendConnInfo(ErrorId, &ConnInfoMsg{Id: sub.Id, Error: err.String()})
 					p.LogError(err)
 					p.cacheLock.Unlock()
@@ -650,7 +649,7 @@ func (p *proxyImpl) handleLocalPubMsg(m *genericMsg) (num int, err os.Error) {
 		for _, sub := range p.importRecvIds {
 			if pub.Id.Match(sub.Id) {
 				if !p.chanTypeMatch(sub, pub) {
-					err = os.ErrorString(errRmtChanTypeMismatch)
+					err = os.NewError(errRmtChanTypeMismatch)
 					p.sysChans.SendConnInfo(ErrorId, &ConnInfoMsg{Id: pub.Id, Error: err.String()})
 					p.LogError(err)
 					p.cacheLock.Unlock()
@@ -822,7 +821,7 @@ func (p *proxyImpl) handlePeerSubMsg(m *genericMsg) (num int, err os.Error) {
 		for _, pub := range p.exportSendIds {
 			if pub.Id.Match(sub.Id) {
 				if !p.chanTypeMatch(pub, sub) {
-					err = os.ErrorString(errRmtChanTypeMismatch)
+					err = os.NewError(errRmtChanTypeMismatch)
 					p.sysChans.SendConnInfo(ErrorId, &ConnInfoMsg{Id: sub.Id, Error: err.String()})
 					p.LogError(err)
 					p.cacheLock.Unlock()
@@ -893,7 +892,7 @@ func (p *proxyImpl) handlePeerPubMsg(m *genericMsg) (num int, err os.Error) {
 		for _, sub := range p.exportRecvIds {
 			if pub.Id.Match(sub.Id) {
 				if !p.chanTypeMatch(pub, sub) {
-					err = os.ErrorString(errRmtChanTypeMismatch)
+					err = os.NewError(errRmtChanTypeMismatch)
 					p.sysChans.SendConnInfo(ErrorId, &ConnInfoMsg{Id: sub.Id, Error: err.String()})
 					p.LogError(err)
 					p.cacheLock.Unlock()

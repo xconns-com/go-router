@@ -152,7 +152,7 @@ func (dt *DbTask) handleDbReq(req *DbReq) {
 				r := dt.random.Intn(1024)
 				if r == 31 {
 					fmt.Println("DbTask at [", dt.servName, "] report fault")
-					dt.Raise(os.ErrorString("DbTask got an error"))
+					dt.Raise(os.NewError("DbTask got an error"))
 				}
 			}
 		} else { //return empty string "" telling client we are standby

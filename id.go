@@ -149,7 +149,7 @@ func (id IntId) String() string {
 var IntSysIdBase int = -10101 //Base value for SysIds of IntId
 func (id IntId) SysID(indx int, args ...int) (ssid Id, err os.Error) {
 	if indx < 0 || indx >= NumSysInternalIds {
-		err = os.ErrorString(errInvalidSysId)
+		err = os.NewError(errInvalidSysId)
 		return
 	}
 	sid := &IntId{Val: (IntSysIdBase - indx)}
@@ -211,7 +211,7 @@ func (id StrId) String() string {
 var StrSysIdBase string = "-10101" //Base value for SysIds of StrId
 func (id StrId) SysID(indx int, args ...int) (ssid Id, err os.Error) {
 	if indx < 0 || indx >= NumSysInternalIds {
-		err = os.ErrorString(errInvalidSysId)
+		err = os.NewError(errInvalidSysId)
 		return
 	}
 	sid := &StrId{Val: (StrSysIdBase + strconv.Itoa(indx))}
@@ -301,7 +301,7 @@ func (id PathId) String() string {
 var PathSysIdBase string = "/10101" //Base value for SysIds of PathId
 func (id PathId) SysID(indx int, args ...int) (ssid Id, err os.Error) {
 	if indx < 0 || indx >= NumSysInternalIds {
-		err = os.ErrorString(errInvalidSysId)
+		err = os.NewError(errInvalidSysId)
 		return
 	}
 	sid := &PathId{Val: (PathSysIdBase + "/" + strconv.Itoa(indx))}
@@ -373,7 +373,7 @@ func (id MsgId) String() string {
 var MsgSysIdBase MsgTag = MsgTag{-10101, -10101} //Base value for SysIds of MsgId
 func (id MsgId) SysID(indx int, args ...int) (ssid Id, err os.Error) {
 	if indx < 0 || indx >= NumSysInternalIds {
-		err = os.ErrorString(errInvalidSysId)
+		err = os.NewError(errInvalidSysId)
 		return
 	}
 	msgTag := MsgSysIdBase

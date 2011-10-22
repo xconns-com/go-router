@@ -72,7 +72,7 @@ func (rcb *recvChanBundle) AllRecverInfo() []*ChanInfo {
 func (rcb *recvChanBundle) AddRecver(id Id, ch Channel, credit int) (err os.Error) {
 	_, ok := rcb.recvChans[id.Key()]
 	if ok {
-		err = os.ErrorString("router recvChanBundle: AddRecver duplicated id")
+		err = os.NewError("router recvChanBundle: AddRecver duplicated id")
 		return
 	}
 	rt := rcb.router
@@ -100,7 +100,7 @@ func (rcb *recvChanBundle) AddRecver(id Id, ch Channel, credit int) (err os.Erro
 func (rcb *recvChanBundle) DelRecver(id Id) os.Error {
 	r, ok := rcb.recvChans[id.Key()]
 	if !ok {
-		return os.ErrorString("router recvChanBundle: DelRecver id doesnt exist")
+		return os.NewError("router recvChanBundle: DelRecver id doesnt exist")
 	}
 	rcb.recvChans[id.Key()] = r, false
 	err := rcb.router.DetachChan(r.id, r.ch.Interface())
@@ -188,7 +188,7 @@ func (scb *sendChanBundle) AddSender(id Id, chanType reflect.Type) (err os.Error
 	_, ok := scb.sendChans[id.Key()]
 	scb.Unlock()
 	if ok {
-		err = os.ErrorString("router sendChanBundle: AddSender duplicated id")
+		err = os.NewError("router sendChanBundle: AddSender duplicated id")
 		return
 	}
 	s := new(senderInBundle)
@@ -230,7 +230,7 @@ func (scb *sendChanBundle) DelSender(id Id) os.Error {
 	}
 	scb.Unlock()
 	if !ok {
-		return os.ErrorString("router sendChanBundle: DelSender id doesnt exist")
+		return os.NewError("router sendChanBundle: DelSender id doesnt exist")
 	}
 	err := scb.router.DetachChan(s.id, s.ch.Interface())
 	if err != nil {
