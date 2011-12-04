@@ -6,10 +6,10 @@
 package main
 
 import (
-	"router"
-	"fmt"
 	"flag"
+	"fmt"
 	"net"
+	"router"
 	"strconv"
 	"time"
 )
@@ -37,8 +37,8 @@ func main() {
 	rot := router.New(router.StrID(), 32, router.BroadcastPolicy /* , "cli", router.ScopeLocal*/ )
 	proxy1 := router.NewProxy(rot, "proxy1", nil, nil)
 	proxy2 := router.NewProxy(rot, "proxy2", nil, nil)
-	proxy1.ConnectRemote(conn1, router.GobMarshaling, router.FlowControl)
-	proxy2.ConnectRemote(conn2, router.GobMarshaling, router.FlowControl)
+	proxy1.ConnectRemote(conn1, router.GobMarshaling, router.XOnOffFlowController)
+	proxy2.ConnectRemote(conn2, router.GobMarshaling, router.XOnOffFlowController)
 
 	reqChan := make(chan string)
 	rspChan := make(chan string)
@@ -60,6 +60,7 @@ func main() {
 		select {
 		case rsp, chOpen := <-rspChan:
 			if !chOpen {
+				fmt.Println("client response closed, exit")
 				cont = false
 			} else {
 				fmt.Printf("client recv response ( %s )\n", rsp)

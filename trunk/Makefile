@@ -14,9 +14,10 @@ GOFILES=\
 	proxy.go\
 	msg.go\
 	logfault.go\
-	utils.go\
+	chanset.go\
 	marshaler.go\
 	stream.go\
 	filtrans.go\
+	flowctrl.go\
 
 include $(GOROOT)/src/Make.pkg

@@ -6,19 +6,19 @@
 package main
 
 import (
-	"router"
-	"rand"
+	"errors"
 	"fmt"
-	"time"
+	"math/rand"
+	"router"
 	"strings"
-	"os"
+	"time"
 )
 
 /*
  DbTask: a task handling requests to backend database
  DbTask has the following messaging interface:
    A> messages sent
-      /App/ServiceName/DB/Response
+      /DB/Response/App/ServiceName
       /Fault/DB/Exception
    B> messages recved
       /DB/Request
@@ -80,7 +80,7 @@ func (dt *DbTask) init(r router.Router, sn string, role ServantRole) {
 	dt.rot = r
 	dt.role = role
 	dt.servName = sn
-	dt.random = rand.New(rand.NewSource(time.Seconds()))
+	dt.random = rand.New(rand.NewSource(time.Now().UnixNano()))
 	dt.dbRespChans = make(map[string](chan string))
 	dt.dbReqChan = make(chan *DbReq)
 	dt.sysCmdChan = make(chan string)
@@ -97,7 +97,7 @@ func (dt *DbTask) shutdown() {
 	//output_intf or send chans
 	dt.FaultRaiser.Close()
 	for k, v := range dt.dbRespChans {
-		dt.rot.DetachChan(router.StrID("/App/"+k+"/DB/Response"), v)
+		dt.rot.DetachChan(router.StrID("/DB/Response/App/"+k), v)
 	}
 	//input_intf or recv chans
 	dt.rot.DetachChan(router.StrID("/Sys/Command"), dt.sysCmdChan)
@@ -124,14 +124,14 @@ func (dt *DbTask) handleCmd(cmd string) bool {
 		if len(svcname) > 0 {
 			ch := make(chan string)
 			dt.dbRespChans[svcname] = ch
-			dt.rot.AttachSendChan(router.StrID("/App/"+svcname+"/DB/Response"), ch)
+			dt.rot.AttachSendChan(router.StrID("/DB/Response/App/"+svcname), ch)
 		}
 	case "DelService":
 		if len(svcname) > 0 {
 			ch, ok := dt.dbRespChans[svcname]
 			if ok {
-				dt.dbRespChans[svcname] = nil, false
-				dt.rot.DetachChan(router.StrID("/App/"+svcname+"/DB/Response"), ch)
+				delete(dt.dbRespChans, svcname)
+				dt.rot.DetachChan(router.StrID("/DB/Response/App/"+svcname), ch)
 			}
 		}
 	default:
@@ -152,7 +152,7 @@ func (dt *DbTask) handleDbReq(req *DbReq) {
 				r := dt.random.Intn(1024)
 				if r == 31 {
 					fmt.Println("DbTask at [", dt.servName, "] report fault")
-					dt.Raise(os.NewError("DbTask got an error"))
+					dt.Raise(errors.New("DbTask got an error"))
 				}
 			}
 		} else { //return empty string "" telling client we are standby

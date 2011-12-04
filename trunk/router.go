@@ -10,13 +10,13 @@
  and attach a recv channel to an id to receive messages. If these 2 ids match, 
  the messages from send channel will be "routed" to recv channel, e.g.
 
- rot := router.New(...)
- chan1 := make(chan string)
- chan2 := make(chan string)
- chan3 := make(chan string)
- rot.AttachSendChan(PathID("/sports/basketball"), chan1)
- rot.AttachRecvChan(PathID("/sports/basketball"), chan2)
- rot.AttachRecvChan(PathID("/sports/*"), chan3)
+    rot := router.New(...)
+    chan1 := make(chan string)
+    chan2 := make(chan string)
+    chan3 := make(chan string)
+    rot.AttachSendChan(PathID("/sports/basketball"), chan1)
+    rot.AttachRecvChan(PathID("/sports/basketball"), chan2)
+    rot.AttachRecvChan(PathID("/sports/*"), chan3)
 
  We can use integers, strings, pathnames, or structs as Ids in router (maybe regex ids
  and tuple id in future).
@@ -27,10 +27,10 @@
 package router
 
 import (
-	"reflect"
+	"errors"
 	"fmt"
-	"os"
 	"io"
+	"reflect"
 	"sync"
 )
 
@@ -52,12 +52,12 @@ type Router interface {
 	//1. used to tell when the remote peers connecting/disconn
 	//2. in AttachRecvChan, used as a flag to ask router to keep recv chan open when all senders close
 	//the returned RoutedChan object can be used to find the number of bound peers: routCh.NumPeers()
-	AttachSendChan(Id, interface{}, ...interface{}) (*RoutedChan, os.Error)
+	AttachSendChan(Id, interface{}, ...interface{}) (*RoutedChan, error)
 	//3. When attaching recv chans, an optional integer can specify the internal buffering size
-	AttachRecvChan(Id, interface{}, ...interface{}) (*RoutedChan, os.Error)
+	AttachRecvChan(Id, interface{}, ...interface{}) (*RoutedChan, error)
 
 	//Detach sendChan/recvChan from router
-	DetachChan(Id, interface{}) os.Error
+	DetachChan(Id, interface{}) error
 
 	//Shutdown router, and close attached proxies and chans
 	Close()
@@ -68,13 +68,13 @@ type Router interface {
 	//3. for more compilcated connection setup (such as setting IdFilter and IdTranslator), use Proxy.Connect() instead
 
 	//Connect to a local router
-	Connect(Router) (Proxy, Proxy, os.Error)
+	Connect(Router) (Proxy, Proxy, error)
 
 	//Connect to a remote router thru io conn
 	//1. io.ReadWriteCloser: transport connection
 	//2. MarshalingPolicy: gob or json marshaling
-	//3. bool flag: turn on flow control on connection
-	ConnectRemote(io.ReadWriteCloser, MarshalingPolicy, ...bool) (Proxy, os.Error)
+	//3. remaining args can be a FlowControlPolicy (e.g. window based or XOnOff)
+	ConnectRemote(io.ReadWriteCloser, MarshalingPolicy, ...interface{}) (Proxy, error)
 
 	//--- other utils ---
 	//return pre-created SysIds according to the router's id-type, with ScopeGlobal / MemberLocal
@@ -167,27 +167,28 @@ func (s *routerImpl) IdsForRecv(predicate func(id Id) bool) map[interface{}]*Cha
 	return ids
 }
 
-func (s *routerImpl) validateId(id Id) (err os.Error) {
+func (s *routerImpl) validateId(id Id) (err error) {
 	if id == nil || (id.Scope() < ScopeGlobal || id.Scope() > ScopeLocal) ||
 		(id.Member() < MemberLocal || id.Member() > MemberRemote) {
-		err = os.NewError(fmt.Sprintf("%s: %v", errInvalidId, id))
+		err = errors.New(fmt.Sprintf("%s: %v", errInvalidId, id))
 	}
 	return
 }
 
-func (s *routerImpl) AttachSendChan(id Id, v interface{}, args ...interface{}) (routCh *RoutedChan, err os.Error) {
+// could use one optional argument of (chan *BindEvent), used to notify if peer recv chan has attached
+func (s *routerImpl) AttachSendChan(id Id, v interface{}, args ...interface{}) (routCh *RoutedChan, err error) {
 	if err = s.validateId(id); err != nil {
 		s.LogError(err)
-		s.Raise(err)
+		//s.Raise(err)
 		return
 	}
 	ch, internalChan := v.(Channel)
 	if !internalChan {
 		ch1 := reflect.ValueOf(v)
 		if ch1.Kind() != reflect.Chan {
-			err = os.NewError(errInvalidChan)
+			err = errors.New(errInvalidChan)
 			s.LogError(err)
-			s.Raise(err)
+			//s.Raise(err)
 			return
 		}
 		ch = ch1
@@ -199,15 +200,15 @@ func (s *routerImpl) AttachSendChan(id Id, v interface{}, args ...interface{}) (
 		case chan *BindEvent:
 			bindChan = cv
 			if cap(bindChan) == 0 {
-				err = os.NewError(errInvalidBindChan + ": binding bindChan is not buffered")
+				err = errors.New(errInvalidBindChan + ": binding bindChan is not buffered")
 				s.LogError(err)
-				s.Raise(err)
+				//s.Raise(err)
 				return
 			}
 		default:
-			err = os.NewError("invalid arguments to attach send chan")
+			err = errors.New("invalid arguments to attach send chan")
 			s.LogError(err)
-			s.Raise(err)
+			//s.Raise(err)
 			return
 		}
 	}
@@ -216,37 +217,42 @@ func (s *routerImpl) AttachSendChan(id Id, v interface{}, args ...interface{}) (
 	err = s.attach(routCh)
 	if err != nil {
 		s.LogError(err)
-		s.Raise(err)
+		//s.Raise(err)
 	}
 	return
 }
 
-func (s *routerImpl) AttachRecvChan(id Id, v interface{}, args ...interface{}) (routCh *RoutedChan, err os.Error) {
+// could use two optional arguments:
+//    1. chan of *BindEvent: serve two purposes:
+//           1> notify if peer send chan has attached
+//           2> ask router to keep this recv chan open even if all peer send chans closed, used for persistent servers
+//    2> an integer: the size of internal buffering inside router for this recv chan
+func (s *routerImpl) AttachRecvChan(id Id, v interface{}, args ...interface{}) (routCh *RoutedChan, err error) {
 	if err = s.validateId(id); err != nil {
 		s.LogError(err)
-		s.Raise(err)
+		//s.Raise(err)
 		return
 	}
 	ch, internalChan := v.(Channel)
 	if !internalChan {
 		ch1 := reflect.ValueOf(v)
 		if ch1.Kind() != reflect.Chan {
-			err = os.NewError(errInvalidChan)
+			err = errors.New(errInvalidChan)
 			s.LogError(err)
-			s.Raise(err)
+			//s.Raise(err)
 			return
 		}
 		ch = ch1
 	}
 	var bindChan chan *BindEvent
 	for i := 0; i < len(args); i++ {
-		switch cv := args[0].(type) {
+		switch cv := args[i].(type) {
 		case chan *BindEvent:
 			bindChan = cv
 			if cap(bindChan) == 0 {
-				err = os.NewError(errInvalidBindChan + ": binding bindChan is not buffered")
+				err = errors.New(errInvalidBindChan + ": binding bindChan is not buffered")
 				s.LogError(err)
-				s.Raise(err)
+				//s.Raise(err)
 				return
 			}
 		case int:
@@ -258,9 +264,9 @@ func (s *routerImpl) AttachRecvChan(id Id, v interface{}, args ...interface{}) (
 			}
 			s.bufSizeLock.Unlock()
 		default:
-			err = os.NewError("invalid arguments to attach recv chan")
+			err = errors.New("invalid arguments to attach recv chan")
 			s.LogError(err)
-			s.Raise(err)
+			//s.Raise(err)
 			return
 		}
 	}
@@ -274,25 +280,25 @@ func (s *routerImpl) AttachRecvChan(id Id, v interface{}, args ...interface{}) (
 	err = s.attach(routCh)
 	if err != nil {
 		s.LogError(err)
-		s.Raise(err)
+		//s.Raise(err)
 	}
 	return
 }
 
-func (s *routerImpl) DetachChan(id Id, v interface{}) (err os.Error) {
+func (s *routerImpl) DetachChan(id Id, v interface{}) (err error) {
 	//s.Log(LOG_INFO, "DetachChan called...")
 	if err = s.validateId(id); err != nil {
 		s.LogError(err)
-		s.Raise(err)
+		//s.Raise(err)
 		return
 	}
 	ch, ok := v.(Channel)
 	if !ok {
 		ch1 := reflect.ValueOf(v)
 		if ch1.Kind() != reflect.Chan {
-			err = os.NewError(errInvalidChan)
+			err = errors.New(errInvalidChan)
 			s.LogError(err)
-			s.Raise(err)
+			//s.Raise(err)
 			return
 		}
 		ch = ch1
@@ -310,10 +316,10 @@ func (s *routerImpl) Close() {
 	s.shutdown()
 }
 
-func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
+func (s *routerImpl) attach(routCh *RoutedChan) (err error) {
 	//handle id
 	if reflect.TypeOf(routCh.Id) != s.idType {
-		err = os.NewError(errIdTypeMismatch + ": " + routCh.Id.String())
+		err = errors.New(errIdTypeMismatch + ": " + routCh.Id.String())
 		s.LogError(err)
 		return
 	}
@@ -321,9 +327,9 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 	s.tblLock.Lock()
 
 	if s.closed {
-		err = os.NewError(fmt.Sprintf("Router closed, cannot attach chan for id %v", routCh.Id))
-		s.LogError(err)
 		s.tblLock.Unlock()
+		err = errors.New(fmt.Sprintf("Router closed, cannot attach chan for id %v", routCh.Id))
+		s.LogError(err)
 		return
 	}
 
@@ -331,7 +337,7 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 	ent, ok := s.routingTable[routCh.Id.Key()]
 	if !ok {
 		if routCh.internalChan {
-			err = os.NewError(fmt.Sprintf("%s %v", errChanGenericType, routCh.Id))
+			err = errors.New(fmt.Sprintf("%s %v", errChanGenericType, routCh.Id))
 			s.LogError(err)
 			s.tblLock.Unlock()
 			return
@@ -345,7 +351,7 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 		ent.recvers = make(map[interface{}]*RoutedChan)
 	} else {
 		if !routCh.internalChan && routCh.Channel.Type() != ent.chanType {
-			err = os.NewError(fmt.Sprintf("%s %v", errChanTypeMismatch, routCh.Id))
+			err = errors.New(fmt.Sprintf("%s %v", errChanTypeMismatch, routCh.Id))
 			s.LogError(err)
 			s.tblLock.Unlock()
 			return
@@ -356,7 +362,7 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 	switch routCh.Kind {
 	case Send:
 		if _, ok = ent.senders[routCh.Channel.Interface()]; ok {
-			err = os.NewError(errDupAttachment)
+			err = errors.New(errDupAttachment)
 			s.LogError(err)
 			s.tblLock.Unlock()
 			return
@@ -365,7 +371,7 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 		}
 	case Recv:
 		if _, ok = ent.recvers[routCh.Channel.Interface()]; ok {
-			err = os.NewError(errDupAttachment)
+			err = errors.New(errDupAttachment)
 			s.LogError(err)
 			s.tblLock.Unlock()
 			return
@@ -417,10 +423,11 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 						}
 					}
 				} else {
-					em := os.NewError(fmt.Sprintf("%s : [%v, %v]", errChanTypeMismatch, routCh.Id, ent2.id))
+					em := errors.New(fmt.Sprintf("%s : [%v, %v]", errChanTypeMismatch, routCh.Id, ent2.id))
 					s.Log(LOG_ERROR, em)
 					//should crash here?
-					s.Raise(em)
+					//s.Raise(em)
+					return
 				}
 			}
 		}
@@ -450,36 +457,30 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err os.Error) {
 	if idx < 0 && routCh.Id.Member() == MemberLocal { //not sys ids
 		switch routCh.Kind {
 		case Send:
-			s.notifier.notifyPub(&ChanInfo{Id: routCh.Id, ChanType: routCh.Channel.Type()})
+			s.notifier.notify(PubId, &ChanInfo{Id: routCh.Id, ChanType: routCh.Channel.Type()})
 		case Recv:
-			s.notifier.notifySub(&ChanInfo{Id: routCh.Id, ChanType: routCh.Channel.Type()})
+			s.notifier.notify(SubId, &ChanInfo{Id: routCh.Id, ChanType: routCh.Channel.Type()})
 		}
 	}
 	return
 }
 
-func (s *routerImpl) detach(routCh *RoutedChan, bySelf bool) (err os.Error) {
+func (s *routerImpl) detach(routCh *RoutedChan, bySelf bool) (err error) {
 	//s.Log(LOG_INFO, fmt.Sprintf("detach chan from id %v\n", routCh.Id))
 
 	//check id
 	if reflect.TypeOf(routCh.Id) != s.idType {
-		err = os.NewError(errIdTypeMismatch + ": " + routCh.Id.String())
+		err = errors.New(errIdTypeMismatch + ": " + routCh.Id.String())
 		s.LogError(err)
 		return
 	}
 
-	routerClosed := false
-
 	s.tblLock.Lock()
-
-	if s.closed {
-		routerClosed = true
-	}
 
 	//find router entry
 	ent, ok := s.routingTable[routCh.Id.Key()]
 	if !ok {
-		err = os.NewError(errDetachChanNotInRouter + ": " + routCh.Id.String())
+		err = errors.New(errDetachChanNotInRouter + ": " + routCh.Id.String())
 		s.LogError(err)
 		s.tblLock.Unlock()
 		return
@@ -494,7 +495,7 @@ func (s *routerImpl) detach(routCh *RoutedChan, bySelf bool) (err os.Error) {
 	s.tblLock.Unlock()
 
 	if !ok {
-		err = os.NewError(errDetachChanNotInRouter + ": " + routCh.Id.String())
+		err = errors.New(errDetachChanNotInRouter + ": " + routCh.Id.String())
 		s.LogError(err)
 		return
 	}
@@ -508,9 +509,9 @@ func (s *routerImpl) detach(routCh *RoutedChan, bySelf bool) (err os.Error) {
 	s.tblLock.Lock()
 
 	if routCh1.Kind == Send {
-		ent.senders[routCh.Channel.Interface()] = routCh1, false
+		delete(ent.senders, routCh.Channel.Interface())
 	} else {
-		ent.recvers[routCh.Channel.Interface()] = routCh1, false
+		delete(ent.recvers, routCh.Channel.Interface())
 	}
 
 	s.tblLock.Unlock()
@@ -536,13 +537,16 @@ func (s *routerImpl) detach(routCh *RoutedChan, bySelf bool) (err os.Error) {
 	}
 
 	//notifier will send in a separate goroutine, so non-blocking here
+	s.tblLock.Lock()
+	routerClosed := s.closed
+	s.tblLock.Unlock()
 	idx := routCh1.Id.SysIdIndex()
 	if !routerClosed && idx < 0 && routCh1.Id.Member() == MemberLocal { //not sys ids
 		switch routCh1.Kind {
 		case Send:
-			s.notifier.notifyUnPub(&ChanInfo{Id: routCh1.Id, ChanType: routCh1.Channel.Type()})
+			s.notifier.notify(UnPubId, &ChanInfo{Id: routCh1.Id, ChanType: routCh1.Channel.Type()})
 		case Recv:
-			s.notifier.notifyUnSub(&ChanInfo{Id: routCh1.Id, ChanType: routCh1.Channel.Type()})
+			s.notifier.notify(UnSubId, &ChanInfo{Id: routCh1.Id, ChanType: routCh1.Channel.Type()})
 		}
 	}
 
@@ -563,8 +567,11 @@ func (s *routerImpl) shutdown() {
 		return
 	}
 
-	//s.proxLock.Lock()
 	// close all peers
+	s.proxLock.Lock()
+	//need this?
+	s.proxLock.Unlock()
+	//s.proxLock.Lock()
 	for i := 0; i < len(s.proxies); i++ {
 		s.proxies[i].Close()
 	}
@@ -584,8 +591,9 @@ func (s *routerImpl) shutdown() {
 	s.tblLock.Unlock()
 	for _, snd := range senders {
 		idx := snd.Id.SysIdIndex()
-		if idx != RouterLogId && idx != RouterFaultId {
-			s.detach(snd, false)
+		//if idx != RouterLogId && idx != RouterFaultId {
+		if idx < 0 { //not sys ids
+			snd.Close()
 		}
 	}
 
@@ -593,7 +601,7 @@ func (s *routerImpl) shutdown() {
 	s.FaultRaiser.Close()
 	s.Logger.Close()
 	s.LogSink.Close()
-
+	s.notifier.Close()
 }
 
 func (s *routerImpl) initSysIds() {
@@ -637,33 +645,31 @@ func (s *routerImpl) delProxy(p Proxy) {
 }
 
 //Connect() connects this router to peer router, the real job is done inside Proxy
-func (r1 *routerImpl) Connect(r2 Router) (p1, p2 Proxy, err os.Error) {
+func (r1 *routerImpl) Connect(r2 Router) (p1, p2 Proxy, err error) {
 	p1 = NewProxy(r1, "", nil, nil)
 	p2 = NewProxy(r2, "", nil, nil)
 	err = p1.Connect(p2)
 	return
 }
 
-func (r *routerImpl) ConnectRemote(rwc io.ReadWriteCloser, mar MarshalingPolicy, flags ...bool) (p Proxy, err os.Error) {
+func (r *routerImpl) ConnectRemote(rwc io.ReadWriteCloser, mar MarshalingPolicy, args ...interface{}) (p Proxy, err error) {
 	p = NewProxy(r, "", nil, nil)
-	err = p.ConnectRemote(rwc, mar, flags...)
+	err = p.ConnectRemote(rwc, mar, args...)
 	return
 }
 
 /*
  New is router constructor. It accepts the following arguments:
- 1. seedId: a dummy id to show what type of ids will be used. New ids will be type-checked against this.
- 2. bufSize: the buffer size used for router's internal channels.
- if bufSize >= 0, its value will be used
- if bufSize < 0, it means unlimited buffering, so router is async and sending on 
- attached channels will never block
- 3. disp: dispatch policy for router. by default, it is BroadcastPolicy
- 4. optional arguments ...:
- name:     router's name, if name is defined, router internal logging will be turned on,
- ie LogRecord generated
- LogScope: if this is set, a console log sink is installed to show router internal log
- if logScope == ScopeLocal, only log msgs from local router will show up
- if logScope == ScopeGlobal, all log msgs from connected routers will show up
+    1. seedId: a dummy id to show what type of ids will be used. New ids will be type-checked against this.
+    2. bufSize: the buffer size used for router's internal channels.
+       if bufSize >= 0, its value will be used
+       if bufSize < 0, it means unlimited buffering, so router is async and sending on attached channels will never block
+    3. disp: dispatch policy for router. by default, it is BroadcastPolicy
+    4. optional arguments ...:
+       name:     router's name, if name is defined, router internal logging will be turned on, ie LogRecord generated
+       LogScope: if this is set, a console log sink is installed to show router internal log
+          if logScope == ScopeLocal, only log msgs from local router will show up
+          if logScope == ScopeGlobal, all log msgs from connected routers will show up
 */
 func New(seedId Id, bufSize int, disp DispatchPolicy, args ...interface{}) Router {
 	//parse optional router name and flag for enable console logging

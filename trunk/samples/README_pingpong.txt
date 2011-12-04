@@ -2,7 +2,7 @@ Let's do some ping-pong...
 
 First, there is a Pinger and a Ponger and they bounce a string msg 
 between them as the ball. They are "active" players, each has
-a goroutine body (Run() method), so let's follow principle and 
+a goroutine (Run() method), so let's follow principle and 
 design their public interface as channels: Ponger will send 
 the msg ball to pong_chan and recv the msg ball 
 from ping_chan, while Pinger will reverse the 

@@ -6,9 +6,9 @@
 package main
 
 import (
+	"fmt"
 	"router"
 	"strings"
-	"fmt"
 )
 
 /*
@@ -21,7 +21,7 @@ import (
  FaultMgrTask has the following messaging interface:
    A> messages sent
       /Sys/OutOfService
-      /App/ServiceName/Command
+      /Fault/Command/App/ServiceName
    B> messages recved
       /Fault/DB/Exception
       /Fault/AppService/Exception
@@ -93,7 +93,7 @@ func (ft *FaultMgrTask) init(r router.Router, sn string, role ServantRole) {
 
 func (ft *FaultMgrTask) shutdown() {
 	for k, v := range ft.svcCmdChans {
-		ft.rot.DetachChan(router.StrID("/App/"+k+"/Command"), v)
+		ft.rot.DetachChan(router.StrID("/Fault/Command/App/"+k), v)
 	}
 	ft.rot.DetachChan(router.StrID("/Sys/OutOfService"), ft.sysOOSChan)
 	ft.rot.DetachChan(router.StrID("/Fault/DB/Exception"), ft.faultReportChan)
@@ -120,14 +120,14 @@ func (ft *FaultMgrTask) handleCmd(cmd string) bool {
 		if len(svcname) > 0 {
 			ch := make(chan string)
 			ft.svcCmdChans[svcname] = ch
-			ft.rot.AttachSendChan(router.StrID("/App/"+svcname+"/Command"), ch)
+			ft.rot.AttachSendChan(router.StrID("/Fault/Command/App/"+svcname), ch)
 		}
 	case "DelService":
 		if len(svcname) > 0 {
 			ch, ok := ft.svcCmdChans[svcname]
 			if ok {
-				ft.svcCmdChans[svcname] = nil, false
-				ft.rot.DetachChan(router.StrID("/App/"+svcname+"/Command"), ch)
+				delete(ft.svcCmdChans, svcname)
+				ft.rot.DetachChan(router.StrID("/Fault/Command/App/"+svcname), ch)
 			}
 		}
 	default:

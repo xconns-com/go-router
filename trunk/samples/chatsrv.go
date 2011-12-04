@@ -5,8 +5,8 @@
 package main
 
 import (
-	"net"
 	"fmt"
+	"net"
 	"router"
 )
 
@@ -48,7 +48,7 @@ func main() {
 		for {
 			select {
 			case idstr := <-stopChan:
-				subjMap[idstr] = nil, false
+				delete(subjMap, idstr)
 			case pub := <-pubChan:
 				//process recved client publication of subjects
 				for _, v := range pub.Info {

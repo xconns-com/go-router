@@ -7,9 +7,9 @@
 package router
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
-	"os"
 )
 
 //Membership identifies whether communicating peers (send chans and recv chans) are from the same router or diff routers
@@ -75,9 +75,9 @@ type Id interface {
 
 	//Generators for creating other ids of same type. Since often we don't
 	//know the exact types of Id.Val, so we have to create new ones from an existing id
-	SysID(int, ...int) (Id, os.Error) //generate sys ids, also called as method of Router
-	SysIdIndex() int                  //return (0 - NumSysInternalIds) for SysIds, return -1 for others
-	Clone(...int) (Id, os.Error)      //create a new id with same id, but possible diff scope & membership
+	SysID(int, ...int) (Id, error) //generate sys ids, also called as method of Router
+	SysIdIndex() int               //return (0 - NumSysInternalIds) for SysIds, return -1 for others
+	Clone(...int) (Id, error)      //create a new id with same id, but possible diff scope & membership
 
 	//Stringer interface
 	String() string
@@ -88,7 +88,7 @@ const (
 	ConnId    = iota //msgs for router connection
 	DisconnId        //msgs for router disconnection
 	ErrorId          //msgs sent when one side detect errors
-	ReadyId          //msgs sent when router's chans ready to send msgs
+	ReadyId          //msgs sent when router's chans ready to recv more msgs
 	PubId            //send new publications (set<id, chan type info>)
 	UnPubId          //remove publications from connected routers
 	SubId            //send new subscriptions (set<id, chan type info>)
@@ -103,6 +103,32 @@ const (
 	NumSysInternalIds
 )
 
+func sysIdxString(idx int) string {
+	switch idx {
+	case ConnId:
+		return "ConnId"
+	case DisconnId:
+		return "DisconnId"
+	case ErrorId:
+		return "ErrorId"
+	case ReadyId:
+		return "ReadyId"
+	case PubId:
+		return "PubId"
+	case UnPubId:
+		return "UnPubId"
+	case SubId:
+		return "SubId"
+	case UnSubId:
+		return "UnSubId"
+	case RouterLogId:
+		return "RouterLogId"
+	case RouterFaultId:
+		return "RouterFaultId"
+	}
+	return "Undefined_Sys_Id"
+}
+
 //A function used as predicate in router.idsForSend()/idsForRecv() to find all ids in a router's
 //namespace which are exported to outside
 func ExportedId(id Id) bool {
@@ -116,7 +142,7 @@ type IntId struct {
 	MemberVal int
 }
 
-func (id IntId) Clone(args ...int) (nnid Id, err os.Error) {
+func (id IntId) Clone(args ...int) (nnid Id, err error) {
 	nid := &IntId{Val: id.Val, ScopeVal: id.ScopeVal, MemberVal: id.MemberVal}
 	l := len(args)
 	if l > 0 {
@@ -147,9 +173,9 @@ func (id IntId) String() string {
 }
 //define 8 system msg ids
 var IntSysIdBase int = -10101 //Base value for SysIds of IntId
-func (id IntId) SysID(indx int, args ...int) (ssid Id, err os.Error) {
+func (id IntId) SysID(indx int, args ...int) (ssid Id, err error) {
 	if indx < 0 || indx >= NumSysInternalIds {
-		err = os.NewError(errInvalidSysId)
+		err = errors.New(errInvalidSysId)
 		return
 	}
 	sid := &IntId{Val: (IntSysIdBase - indx)}
@@ -178,7 +204,7 @@ type StrId struct {
 	MemberVal int
 }
 
-func (id StrId) Clone(args ...int) (nnid Id, err os.Error) {
+func (id StrId) Clone(args ...int) (nnid Id, err error) {
 	nid := &StrId{Val: id.Val, ScopeVal: id.ScopeVal, MemberVal: id.MemberVal}
 	l := len(args)
 	if l > 0 {
@@ -209,9 +235,9 @@ func (id StrId) String() string {
 }
 //define 8 system msg ids
 var StrSysIdBase string = "-10101" //Base value for SysIds of StrId
-func (id StrId) SysID(indx int, args ...int) (ssid Id, err os.Error) {
+func (id StrId) SysID(indx int, args ...int) (ssid Id, err error) {
 	if indx < 0 || indx >= NumSysInternalIds {
-		err = os.NewError(errInvalidSysId)
+		err = errors.New(errInvalidSysId)
 		return
 	}
 	sid := &StrId{Val: (StrSysIdBase + strconv.Itoa(indx))}
@@ -243,7 +269,7 @@ type PathId struct {
 	MemberVal int
 }
 
-func (id PathId) Clone(args ...int) (nnid Id, err os.Error) {
+func (id PathId) Clone(args ...int) (nnid Id, err error) {
 	nid := &PathId{Val: id.Val, ScopeVal: id.ScopeVal, MemberVal: id.MemberVal}
 	l := len(args)
 	if l > 0 {
@@ -299,9 +325,9 @@ func (id PathId) String() string {
 }
 //define 8 system msg ids
 var PathSysIdBase string = "/10101" //Base value for SysIds of PathId
-func (id PathId) SysID(indx int, args ...int) (ssid Id, err os.Error) {
+func (id PathId) SysID(indx int, args ...int) (ssid Id, err error) {
 	if indx < 0 || indx >= NumSysInternalIds {
-		err = os.NewError(errInvalidSysId)
+		err = errors.New(errInvalidSysId)
 		return
 	}
 	sid := &PathId{Val: (PathSysIdBase + "/" + strconv.Itoa(indx))}
@@ -339,7 +365,7 @@ type MsgId struct {
 	MemberVal int
 }
 
-func (id MsgId) Clone(args ...int) (nnid Id, err os.Error) {
+func (id MsgId) Clone(args ...int) (nnid Id, err error) {
 	nid := &MsgId{Val: id.Val, ScopeVal: id.ScopeVal, MemberVal: id.MemberVal}
 	l := len(args)
 	if l > 0 {
@@ -371,9 +397,9 @@ func (id MsgId) String() string {
 }
 //define 8 system msg ids
 var MsgSysIdBase MsgTag = MsgTag{-10101, -10101} //Base value for SysIds of MsgId
-func (id MsgId) SysID(indx int, args ...int) (ssid Id, err os.Error) {
+func (id MsgId) SysID(indx int, args ...int) (ssid Id, err error) {
 	if indx < 0 || indx >= NumSysInternalIds {
-		err = os.NewError(errInvalidSysId)
+		err = errors.New(errInvalidSysId)
 		return
 	}
 	msgTag := MsgSysIdBase
@@ -562,7 +588,6 @@ func MsgID(args ...interface{}) Id {
 }
 
 // for scope checking
-
 var scope_check_table [][]int = [][]int{
 	[]int{1, 0, 1, 0, 0, 1},
 	[]int{0, 0, 0, 0, 0, 1},

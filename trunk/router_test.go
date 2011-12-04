@@ -7,8 +7,8 @@
 package router
 
 import (
-	"strings"
 	"net"
+	"strings"
 	"testing"
 )
 

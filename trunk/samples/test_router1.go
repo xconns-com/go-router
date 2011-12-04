@@ -9,8 +9,8 @@ package main
 import (
 	"fmt"
 	"go-router.googlecode.com/svn/branches/router1"
-	"strings"
 	"net"
+	"strings"
 )
 
 func test_IntId() {

@@ -7,9 +7,9 @@
 package router
 
 import (
-	"rand"
-	"time"
+	"math/rand"
 	"reflect"
+	"time"
 )
 
 //
@@ -96,7 +96,7 @@ var RoundRobinPolicy DispatchPolicy = PolicyFunc(func() Dispatcher { return NewR
 type RandomDispatcher rand.Rand
 
 func NewRandomDispatcher() *RandomDispatcher {
-	return (*RandomDispatcher)(rand.New(rand.NewSource(time.Seconds())))
+	return (*RandomDispatcher)(rand.New(rand.NewSource(time.Now().UnixNano())))
 }
 
 func (rd *RandomDispatcher) Dispatch(v reflect.Value, recvers []*RoutedChan) {
