@@ -7,9 +7,9 @@
 package router
 
 import (
-	"io"
-	"os"
+	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"sync"
 )
@@ -70,9 +70,6 @@ func (s *stream) Close() {
 		//notify peer
 		s.Closed = true
 		s.peer.sendCtrlMsg(&genericMsg{s.proxy.router.SysID(DisconnId), &ConnInfoMsg{}})
-		//shutdown outputMainLoop
-		//id1, _ := s.proxy.router.seedId.Clone(NumScope, NumMembership) //special id to mark chan close
-		//s.outputChan <- &genericMsg{id1, nil}		
 		//shutdown inputMainLoop
 		s.rwc.Close()
 		//close logger
@@ -87,13 +84,13 @@ func (s *stream) Close() {
 func (s *stream) appMsgChanForId(id Id) (Channel, int) {
 	var appCh Channel
 	if s.proxy.translator != nil {
-		if s.proxy.router.async || s.proxy.flowControlled {
+		if s.proxy.router.async || s.proxy.flowController != nil {
 			appCh = newGenMsgChan(s.proxy.translator.TranslateOutward(id), s.outputAsyncChan)
 		} else {
 			appCh = newGenericMsgChan(s.proxy.translator.TranslateOutward(id), s.outputChan)
 		}
 	} else {
-		if s.proxy.router.async || s.proxy.flowControlled {
+		if s.proxy.router.async || s.proxy.flowController != nil {
 			appCh = newGenMsgChan(id, s.outputAsyncChan)
 		} else {
 			appCh = newGenericMsgChan(id, s.outputChan)
@@ -106,7 +103,7 @@ func (s *stream) appMsgChanForId(id Id) (Channel, int) {
 }
 
 //send ctrl data to io.Writer
-func (s *stream) sendCtrlMsg(m *genericMsg) (err os.Error) {
+func (s *stream) sendCtrlMsg(m *genericMsg) (err error) {
 	s.outputChan <- m
 	if m.Id.SysIdIndex() == DisconnId {
 		s.Close()
@@ -117,7 +114,7 @@ func (s *stream) sendCtrlMsg(m *genericMsg) (err os.Error) {
 func (s *stream) outputMainLoop() {
 	s.Log(LOG_INFO, "stream outputMainLoop start")
 	//
-	var err os.Error
+	var err error
 	cont := true
 	for cont {
 		m, oOpen := <-s.outputChan
@@ -138,7 +135,6 @@ func (s *stream) outputMainLoop() {
 			//send id
 			if err = s.mar.Marshal(m.Id); err != nil {
 				s.LogError(err)
-				//s.Raise(err)
 				cont = false
 			} else if !(m.Id.Scope() == NumScope && m.Id.Member() == NumMembership) {
 				//for json encoding, we need pre-create id structs saved as interface
@@ -149,21 +145,18 @@ func (s *stream) outputMainLoop() {
 					ici := m.Data.(*ChanInfoMsg)
 					if err = marshalIdChanInfoMsg(s.mar, ici); err != nil {
 						s.LogError(err)
-						//s.Raise(err)
 						cont = false
 					}
 				case ReadyId:
 					ici := m.Data.(*ConnReadyMsg)
 					if err = marshalConnReadyMsg(s.mar, ici); err != nil {
 						s.LogError(err)
-						//s.Raise(err)
 						cont = false
 					}
 				default:
 					//send data
 					if err = s.mar.Marshal(m.Data); err != nil {
 						s.LogError(err)
-						//s.Raise(err)
 						cont = false
 					}
 				}
@@ -193,12 +186,11 @@ func (s *stream) inputMainLoop() {
 	s.Close()
 }
 
-func (s *stream) recv() (err os.Error) {
+func (s *stream) recv() (err error) {
 	r := s.proxy.router
 	id, _ := r.seedId.Clone()
 	if err = s.demar.Demarshal(id); err != nil {
 		s.LogError(err)
-		//s.Raise(err)
 		return
 	}
 	switch id.SysIdIndex() {
@@ -231,16 +223,19 @@ func (s *stream) recv() (err os.Error) {
 			s.peer.sendCtrlMsg(&genericMsg{id, cm})
 		}
 	default: //appMsg
-		if id.Scope() == NumScope && id.Member() == NumMembership { //chan is closed
-			peerChan, _ := s.peer.appMsgChanForId(id)
-			if peerChan != nil {
-				peerChan.Close()
-				s.Log(LOG_INFO, fmt.Sprintf("close proxy forwarding chan for %v", id))
-			}
+		peerChan, num := s.peer.appMsgChanForId(id)
+		if peerChan == nil {
+			err = errors.New(fmt.Sprintf("Stream fail to find sendChan for id %v", id))
+			s.LogError(err)
+			return
 		}
-		chanType := s.proxy.getExportRecvChanType(id)
+		if id.Scope() == NumScope && id.Member() == NumMembership { //chan is closed
+			peerChan.Close()
+			s.Log(LOG_INFO, fmt.Sprintf("close proxy forwarding chan for %v", id))
+		}
+		chanType := peerChan.Type()
 		if chanType == nil {
-			err = os.NewError(fmt.Sprintf("failed to find chanType for id %v", id))
+			err = errors.New(fmt.Sprintf("failed to find chanType for id %v", id))
 			return
 		}
 		appMsg := reflect.New(chanType.Elem())
@@ -249,8 +244,7 @@ func (s *stream) recv() (err os.Error) {
 			s.LogError(err)
 			return
 		} else {
-			peerChan, num := s.peer.appMsgChanForId(id)
-			if peerChan != nil && num > 0 {
+			if num > 0 {
 				peerChan.Send(appMsg.Elem())
 			}
 		}

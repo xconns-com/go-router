@@ -10,10 +10,10 @@ import (
 	"sync"
 )
 
-type RoutedChanType int
+type ChanDirection int
 
 const (
-	Send RoutedChanType = iota
+	Send ChanDirection = iota
 	Recv
 )
 
@@ -33,30 +33,29 @@ type oper struct {
  RoutedChan represents channels which are attached to router. 
  They expose Channel's interface: Send()/TrySend()/Recv()/TryRecv()/...
  and additional info:
- 1. Id - the id which channel is attached to
- 2. NumPeers() - return the number of bound peers
- 3. Peers() - array of bound peers RoutedChan
- 4. Detach() - detach the channel from router
+    1. Id - the id which channel is attached to
+    2. NumPeers() - return the number of bound peers
+    3. Peers() - array of bound peers RoutedChan
+    4. Detach() - detach the channel from router
 */
 type RoutedChan struct {
-	Kind         RoutedChanType
+	Kind         ChanDirection
 	Id           Id
 	Channel      //external SendChan/RecvChan, attached by clients
 	router       *routerImpl
 	dispatcher   Dispatcher //current for push dispacher, only sender uses dispatcher
 	bindChan     chan *BindEvent
-	bindCond     chan bool //simulate a cond var for waiting for recver binding
+	bindCond     *sync.Cond
 	bindLock     sync.Mutex
 	bindings     []*RoutedChan //binding_set
 	inDisp       bool          //in a dispatch loop
-	dispLock     sync.Mutex
 	opBuf        []*oper
 	internalChan bool
 	detached     bool
 	delayClose   func(*RoutedChan)
 }
 
-func newRoutedChan(id Id, t RoutedChanType, ch Channel, r *routerImpl, bc chan *BindEvent) *RoutedChan {
+func newRoutedChan(id Id, t ChanDirection, ch Channel, r *routerImpl, bc chan *BindEvent) *RoutedChan {
 	routCh := &RoutedChan{}
 	routCh.Kind = t
 	routCh.Id = id
@@ -64,7 +63,7 @@ func newRoutedChan(id Id, t RoutedChanType, ch Channel, r *routerImpl, bc chan *
 	routCh.router = r
 	routCh.bindChan = bc
 	if t == Send {
-		routCh.bindCond = make(chan bool, 1)
+		routCh.bindCond = sync.NewCond(&routCh.bindLock)
 	}
 	return routCh
 }
@@ -80,7 +79,13 @@ func (e *RoutedChan) Close() {
 		defer func() {
 			_ = recover()
 		}()
+		//wake up sender goroutine blocked waiting for peers
+		e.bindLock.Lock()
+		e.detached = true
+		e.bindCond.Broadcast()
+		e.bindLock.Unlock()
 	}
+	//close sender chan so sender goroutine will exit
 	e.Channel.Close()
 }
 
@@ -112,7 +117,6 @@ func (e *RoutedChan) Peers() (copySet []*RoutedChan) {
 	return
 }
 
-
 func (e *RoutedChan) start(disp DispatchPolicy) {
 	if e.Kind == Send {
 		e.dispatcher = disp.NewDispatcher()
@@ -125,25 +129,26 @@ func (e *RoutedChan) senderLoop() {
 	for cont {
 		e.bindLock.Lock()
 		//block here till we have recvers so that message will not be lost
-		for len(e.bindings) == 0 {
-			e.bindLock.Unlock()
-			//wait here until some recver attach
-			<-e.bindCond
-			e.bindLock.Lock()
+		for len(e.bindings) == 0 && !e.detached {
+			e.bindCond.Wait()
 		}
 		e.bindLock.Unlock()
 		v, chOpen := e.Channel.Recv()
 		if chOpen {
-			e.dispLock.Lock()
-			e.inDisp = true
-			e.dispLock.Unlock()
-			e.dispatcher.Dispatch(v, e.bindings)
-			e.dispLock.Lock()
+			e.bindLock.Lock()
+			if len(e.bindings) > 0 {
+				e.inDisp = true
+			}
+			e.bindLock.Unlock()
+			if e.inDisp {
+				e.dispatcher.Dispatch(v, e.bindings)
+			}
+			e.bindLock.Lock()
 			e.inDisp = false
 			if len(e.opBuf) > 0 {
 				e.runPendingOps()
 			}
-			e.dispLock.Unlock()
+			e.bindLock.Unlock()
 		} else {
 			e.router.detach(e, true)
 			cont = false
@@ -157,10 +162,14 @@ func (e *RoutedChan) runPendingOps() {
 		switch op.kind {
 		case attachOp:
 			e.attachImpl(op.peer)
-			op.peer.attachImpl(e)
+			if e.Kind == Send {
+				op.peer.attach(e)
+			}
 		case detachOp:
 			e.detachImpl(op.peer)
-			op.peer.detachImpl(e)
+			if e.Kind == Send {
+				op.peer.detach(e)
+			}
 		}
 		e.opBuf[i] = nil
 	}
@@ -173,8 +182,6 @@ func (e *RoutedChan) Detach() {
 }
 
 func (e *RoutedChan) attachImpl(p *RoutedChan) {
-	e.bindLock.Lock()
-	defer e.bindLock.Unlock()
 	e.bindings = append(e.bindings, p)
 	if e.bindChan != nil {
 		//KeepLatest non-blocking send
@@ -189,29 +196,24 @@ func (e *RoutedChan) attachImpl(p *RoutedChan) {
 		}
 	}
 	if e.Kind == Send && len(e.bindings) == 1 { //first recver attached
-		//fill e.bindCond to notify we have bindings now
-		select {
-		case e.bindCond <- true:
-		default:
-		}
+		e.bindCond.Broadcast()
 	}
 }
 
 func (e *RoutedChan) attach(p *RoutedChan) {
-	e.dispLock.Lock()
-	defer e.dispLock.Unlock()
+	e.bindLock.Lock()
+	defer e.bindLock.Unlock()
 	if e.inDisp {
 		e.opBuf = append(e.opBuf, &oper{attachOp, p})
 	} else {
 		e.attachImpl(p)
 		if e.Kind == Send {
-			p.attachImpl(e)
+			p.attach(e)
 		}
 	}
 }
 
 func (e *RoutedChan) detachImpl(p *RoutedChan) {
-	e.bindLock.Lock()
 	n := len(e.bindings)
 	for i, v := range e.bindings {
 		if v == p {
@@ -253,38 +255,30 @@ func (e *RoutedChan) detachImpl(p *RoutedChan) {
 						//since no bindChan, user code is not monitoring bind status
 						//close ext chan to notify potential pending goroutine
 						detached := e.detached
-						e.bindLock.Unlock()
+						e.bindLock.Unlock() //
 						e.Close()
 						if !detached {
 							e.Detach() //remove self from routing table
 						}
+						e.bindLock.Lock()
 						return
-					}
-				case Send:
-					//for sender, if all recver Detached
-					//drain e.bindCond so that dispatcher goroutine can wait
-					select {
-					case _ = <-e.bindCond:
-					default:
 					}
 				}
 			}
-			e.bindLock.Unlock()
 			return
 		}
 	}
-	e.bindLock.Unlock()
 }
 
 func (e *RoutedChan) detach(p *RoutedChan) {
-	e.dispLock.Lock()
-	defer e.dispLock.Unlock()
+	e.bindLock.Lock()
+	defer e.bindLock.Unlock()
 	if e.inDisp {
 		e.opBuf = append(e.opBuf, &oper{detachOp, p})
 	} else {
 		e.detachImpl(p)
 		if e.Kind == Send {
-			p.detachImpl(e)
+			p.detach(e)
 		}
 	}
 }

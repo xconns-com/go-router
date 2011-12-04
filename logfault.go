@@ -7,10 +7,10 @@
 package router
 
 import (
-	"os"
-	"time"
 	"log"
+	"reflect"
 	"sync"
+	"time"
 )
 
 //Some basic router internal error msgs for log and fault
@@ -67,6 +67,7 @@ type LogRecord struct {
 //a LogRecord sender
 type logger struct {
 	routCh  *RoutedChan
+	asyncCh Channel
 	source  string
 	logChan chan *LogRecord
 	router  Router
@@ -79,8 +80,10 @@ func newlogger(id Id, r Router, src string, bufSize int) *logger {
 	logger.router = r
 	logger.source = src
 	logger.logChan = make(chan *LogRecord, bufSize)
-	var err os.Error
+	var err error
 	logger.routCh, err = logger.router.AttachSendChan(id, logger.logChan)
+	//use async chan to send logs so that logger is nonblocking
+	logger.asyncCh = &asyncChan{Channel: logger.routCh}
 	if err != nil {
 		log.Panicln("failed to add logger for ", logger.source)
 		return nil
@@ -93,24 +96,14 @@ func (l *logger) log(p LogPriority, msg interface{}) {
 		return
 	}
 
-	lr := &LogRecord{p, l.source, msg, time.Nanoseconds()}
-	/*
-			 //when logChan full, drop the oldest log record, avoid block / slow down app
-		 L: for {
-				select {
-				case l.logChan <- lr:
-					break L
-				default:
-					<- l.logChan
-				}
-			}
-	*/
-	//log all msgs even if too much log recrods may block / slow down app
-	l.logChan <- lr
+	lr := &LogRecord{p, l.source, msg, time.Now().UnixNano()}
+	//log all log msgs asynchronously so that it will not block the sender
+	l.asyncCh.Send(reflect.ValueOf(lr))
 }
 
 func (l *logger) Close() {
-	l.router.DetachChan(l.id, l.logChan)
+	//l.router.DetachChan(l.id, l.logChan)
+	l.asyncCh.Close()
 }
 
 //Logger can be embedded into user structs / types, which then can use Log() / LogError() directly
@@ -155,7 +148,7 @@ func (l *Logger) Log(p LogPriority, msg interface{}) {
 }
 
 //send a log record and store error info in it
-func (l *Logger) LogError(err os.Error) {
+func (l *Logger) LogError(err error) {
 	l.Lock()
 	defer l.Unlock()
 	if l.logger != nil {
@@ -203,14 +196,6 @@ func (l *LogSink) runConsoleLogSink() {
 			if !snkOpen {
 				break
 			}
-			//convert timestamp, following format/code of package "log" for consistency
-			/*
-			 ts := ""
-			 itoa := strconv.Itoa;
-			 t := time.SecondsToLocalTime(lr.Timestamp / 1e9)
-			 ts += itoa(int(t.Year)) + "/" + itoa(t.Month) + "/" + itoa(t.Day) + " "
-			 ts += itoa(t.Hour) + ":" + itoa(t.Minute) + ":" + itoa(t.Second)
-			*/
 			switch lr.Pri {
 			case LOG_ERROR:
 				fallthrough
@@ -229,13 +214,12 @@ func (l *LogSink) runConsoleLogSink() {
 	}()
 }
 
-
 //Fault management
 
 //FaultRecord records some details about fault
 type FaultRecord struct {
 	Source    string
-	Info      os.Error
+	Info      error
 	Timestamp int64
 }
 
@@ -243,6 +227,7 @@ type faultRaiser struct {
 	routCh    *RoutedChan
 	source    string
 	faultChan chan *FaultRecord
+	asyncCh   Channel
 	router    *routerImpl
 	id        Id
 	caught    bool
@@ -254,31 +239,33 @@ func newfaultRaiser(id Id, r Router, src string, bufSize int) *faultRaiser {
 	faultRaiser.router = r.(*routerImpl)
 	faultRaiser.source = src
 	faultRaiser.faultChan = make(chan *FaultRecord, bufSize)
-	var err os.Error
+	var err error
 	faultRaiser.routCh, err = faultRaiser.router.AttachSendChan(id, faultRaiser.faultChan)
 	if err != nil {
 		log.Println("failed to add faultRaiser for [%v, %v]", faultRaiser.source, id)
 		return nil
 	}
+	faultRaiser.asyncCh = &asyncChan{Channel: faultRaiser.routCh}
 	//log.Stdout("add faultRaiser for ", faultRaiser.source);
 	return faultRaiser
 }
 
-func (l *faultRaiser) raise(msg os.Error) {
+func (l *faultRaiser) raise(msg error) {
 	if l.routCh.NumPeers() == 0 {
 		//l.router.Log(LOG_ERROR, fmt.Sprintf("Crash at %v", msg))
 		log.Panicf("Crash at %v", msg)
 		return
 	}
 
-	lr := &FaultRecord{l.source, msg, time.Nanoseconds()}
+	lr := &FaultRecord{l.source, msg, time.Now().UnixNano()}
 
-	//send all msgs which are too important to lose
-	l.faultChan <- lr
+	//send all fault msgs async so that caller is not blocked
+	l.asyncCh.Send(reflect.ValueOf(lr))
 }
 
 func (l *faultRaiser) Close() {
-	l.router.DetachChan(l.id, l.faultChan)
+	//l.router.DetachChan(l.id, l.faultChan)
+	l.asyncCh.Close()
 }
 
 //FaultRaiser can be embedded into user structs/ types, which then can call Raise() directly
@@ -314,7 +301,7 @@ func (l *FaultRaiser) Close() {
 }
 
 //raise a fault - send a FaultRecord to faultId in router
-func (r *FaultRaiser) Raise(msg os.Error) {
+func (r *FaultRaiser) Raise(msg error) {
 	r.Lock()
 	defer r.Unlock()
 	if r.faultRaiser != nil {

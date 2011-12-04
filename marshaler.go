@@ -7,23 +7,22 @@
 package router
 
 import (
-	"gob"
-	"json"
-	"io"
-	"os"
-	"reflect"
+	"encoding/gob"
+	"encoding/json"
 	"fmt"
+	"io"
+	"reflect"
 	"sync"
 )
 
 //the common interface of all marshaler such as GobMarshaler and JsonMarshaler
 type Marshaler interface {
-	Marshal(interface{}) os.Error
+	Marshal(interface{}) error
 }
 
 //the common interface of all demarshaler such as GobDemarshaler and JsonDemarshaler
 type Demarshaler interface {
-	Demarshal(interface{}) os.Error
+	Demarshal(interface{}) error
 }
 
 //the common interface of all Marshaling policy such as GobMarshaling and JsonMarshaling
@@ -69,14 +68,13 @@ func (g *gobMarshalingPolicy) NewDemarshaler(r io.Reader) Demarshaler {
 	return &gobDemarshaler{gob.NewDecoder(r)}
 }
 
-func (gm *gobMarshaler) Marshal(e interface{}) os.Error {
+func (gm *gobMarshaler) Marshal(e interface{}) error {
 	return gm.Encode(e)
 }
 
-func (gm *gobDemarshaler) Demarshal(e interface{}) os.Error {
+func (gm *gobDemarshaler) Demarshal(e interface{}) error {
 	return gm.Decode(e)
 }
-
 
 // marshalling policy using json
 
@@ -103,15 +101,15 @@ func (j jsonMarshalingPolicy) NewDemarshaler(r io.Reader) Demarshaler {
 	return &jsonDemarshaler{json.NewDecoder(r)}
 }
 
-func (jm *jsonMarshaler) Marshal(e interface{}) os.Error {
+func (jm *jsonMarshaler) Marshal(e interface{}) error {
 	return jm.Encode(e)
 }
 
-func (jm *jsonDemarshaler) Demarshal(e interface{}) os.Error {
+func (jm *jsonDemarshaler) Demarshal(e interface{}) error {
 	return jm.Decode(e)
 }
 
-func marshalConnReadyMsg(mar Marshaler, crm *ConnReadyMsg) (err os.Error) {
+func marshalConnReadyMsg(mar Marshaler, crm *ConnReadyMsg) (err error) {
 	sz := len(crm.Info)
 	if err = mar.Marshal(sz); err != nil {
 		return
@@ -119,7 +117,7 @@ func marshalConnReadyMsg(mar Marshaler, crm *ConnReadyMsg) (err os.Error) {
 	return mar.Marshal(crm)
 }
 
-func demarshalConnReadyMsg(demar Demarshaler, id Id, crm *ConnReadyMsg) (err os.Error) {
+func demarshalConnReadyMsg(demar Demarshaler, id Id, crm *ConnReadyMsg) (err error) {
 	num := 0
 	if err = demar.Demarshal(&num); err != nil {
 		return
@@ -135,7 +133,7 @@ func demarshalConnReadyMsg(demar Demarshaler, id Id, crm *ConnReadyMsg) (err os.
 	return demar.Demarshal(crm)
 }
 
-func marshalIdChanInfoMsg(mar Marshaler, crm *ChanInfoMsg) (err os.Error) {
+func marshalIdChanInfoMsg(mar Marshaler, crm *ChanInfoMsg) (err error) {
 	sz := len(crm.Info)
 	if err = mar.Marshal(sz); err != nil {
 		return
@@ -143,20 +141,24 @@ func marshalIdChanInfoMsg(mar Marshaler, crm *ChanInfoMsg) (err os.Error) {
 	for i := 0; i < sz; i++ {
 		ici := crm.Info[i]
 		if err = mar.Marshal(ici.Id); err != nil {
-			return
+			//fmt.Printf("marshalIdChanInfoMsg: failed to marshal Id=%v, err=%v\n", ici.Id, err)
+			//return
 		}
 		if ici.ElemType == nil {
-			typStr := getMsgTypeEncoding(ici.ChanType.Elem())
-			ici.ElemType = &chanElemTypeData{FullName: typStr}
+			ici.ElemType = new(chanElemTypeData)
+		}
+		if len(ici.ElemType.FullName) == 0 {
+			ici.ElemType.FullName = getMsgTypeEncoding(ici.ChanType.Elem())
 		}
 		if err = mar.Marshal(ici.ElemType); err != nil {
-			return
+			//fmt.Printf("marshalIdChanInfoMsg: failed to marshal ElemType=%v, err=%v\n", ici.ElemType, err)
+			//return
 		}
 	}
 	return
 }
 
-func demarshalIdChanInfoMsg(demar Demarshaler, id Id, crm *ChanInfoMsg) (err os.Error) {
+func demarshalIdChanInfoMsg(demar Demarshaler, id Id, crm *ChanInfoMsg) (err error) {
 	num := 0
 	if err = demar.Demarshal(&num); err != nil {
 		return
@@ -167,17 +169,18 @@ func demarshalIdChanInfoMsg(demar Demarshaler, id Id, crm *ChanInfoMsg) (err os.
 			id1, _ := id.Clone()
 			info[i] = &ChanInfo{Id: id1, ElemType: &chanElemTypeData{}}
 			if err = demar.Demarshal(info[i].Id); err != nil {
-				return
+				//fmt.Printf("marshalIdChanInfoMsg: failed to demarshal Id=%v, err=%v\n", info[i].Id, err)
+				//return
 			}
 			if err = demar.Demarshal(info[i].ElemType); err != nil {
-				return
+				//fmt.Printf("marshalIdChanInfoMsg: failed to demarshal ElemType=%v, err=%v\n", info[i].ElemType, err)
+				//return
 			}
 		}
 		crm.Info = info
 	}
 	return
 }
-
 
 func baseType(t reflect.Type) (b reflect.Type) {
 	b = t

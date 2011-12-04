@@ -7,8 +7,8 @@
 package router
 
 import (
-	"reflect"
 	"fmt"
+	"reflect"
 )
 
 //a message struct for propagating router's namespace changes (chan attachments or detachments)
@@ -24,11 +24,7 @@ type ChanInfo struct {
 }
 
 func (ici ChanInfo) String() string {
-	info := fmt.Sprintf("%v", ici.Id)
-	if ici.ElemType != nil {
-		info = fmt.Sprintf("%v_%v", info, ici.ElemType.FullName)
-	}
-	return info
+	return fmt.Sprintf("%v_%v", ici.Id, ici.ElemType)
 }
 
 //store marshaled information about ChanType
@@ -39,6 +35,10 @@ type chanElemTypeData struct {
 	//it contains info for both names/types.
 	//e.g. for struct, it could be in form of "struct{fieldName:typeName,...}"
 	TypeEncoding string
+}
+
+func (et chanElemTypeData) String() string {
+	return fmt.Sprintf("[%v_%v]", et.FullName, et.TypeEncoding)
 }
 
 //the generic message wrapper
@@ -52,7 +52,7 @@ type ConnInfoMsg struct {
 	ConnInfo string
 	Error    string
 	Id       Id
-	Type     int //async/flowControlled/raw
+	Type     string //async/flowControlled/raw
 }
 
 //recver-router notify sender-router which channel are ready to recv how many msgs

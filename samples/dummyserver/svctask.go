@@ -6,12 +6,12 @@
 package main
 
 import (
-	"router"
-	"rand"
+	"errors"
 	"fmt"
-	"time"
+	"math/rand"
+	"router"
 	"strings"
-	"os"
+	"time"
 )
 
 /*
@@ -25,8 +25,8 @@ ServiceTask has the following messaging interface:
       /DB/Request
    B> messages recved
       /App/ServiceName/Request
-      /App/ServiceName/Command
-      /App/ServiceName/DB/Response
+      /Fault/Command/App/ServiceName
+      /DB/Response/App/ServiceName
       /Sys/Command
 */
 type ServiceTask struct {
@@ -67,11 +67,7 @@ func (at *ServiceTask) Run(r router.Router, sn string, n string, role ServantRol
 		case cmd, sysOpen := <-at.sysCmdChan:
 			if sysOpen {
 				cont = at.handleCmd(cmd)
-				if !cont {
-					fmt.Println("App task [", at.name, "] at [", at.servantName, "] exit1")
-				}
 			} else {
-				fmt.Println("App task [", at.name, "] at [", at.servantName, "] exit2")
 				cont = false
 			}
 		case req, reqOpen := <-svcReqChan:
@@ -80,7 +76,6 @@ func (at *ServiceTask) Run(r router.Router, sn string, n string, role ServantRol
 					at.handleSvcReq(req)
 				}
 			} else {
-				fmt.Println("App task [", at.name, "] at [", at.servantName, "] exit3")
 				//cont = false
 				svcReqChan = nil
 			}
@@ -97,13 +92,13 @@ func (at *ServiceTask) Run(r router.Router, sn string, n string, role ServantRol
 					}
 				}
 			} else {
-				fmt.Println("App task [", at.name, "] at [", at.servantName, "] exit4")
 				//cont = false
 				svcCmdChan = nil
 			}
 		}
 	}
 	//shutdown phase
+	fmt.Println("App task [", at.name, "] at [", at.servantName, "] start shutting down...")
 	at.shutdown()
 	fmt.Println("App task [", at.name, "] at [", at.servantName, "] exit")
 }
@@ -113,7 +108,7 @@ func (at *ServiceTask) init(r router.Router, sn string, n string, role ServantRo
 	at.name = n
 	at.servantName = sn
 	at.role = role
-	at.random = rand.New(rand.NewSource(time.Seconds()))
+	at.random = rand.New(rand.NewSource(time.Now().UnixNano()))
 	at.svcRespChan = make(chan string)
 	at.dbReqChan = make(chan *DbReq)
 	at.svcReqChan = make(chan string)
@@ -123,31 +118,13 @@ func (at *ServiceTask) init(r router.Router, sn string, n string, role ServantRo
 	svcname := "/App/" + at.name
 	//output_intf or send chans
 	at.FaultRaiser = router.NewFaultRaiser(router.StrID("/Fault/AppService/Exception"), at.rot, at.name)
-	_, err := at.rot.AttachSendChan(router.StrID("/DB/Request"), at.dbReqChan)
-	if err != nil {
-		fmt.Println(sn, " failed to attach /DB/Request")
-	}
-	_, err = at.rot.AttachSendChan(router.StrID(svcname+"/Response"), at.svcRespChan)
-	if err != nil {
-		fmt.Println(sn, " failed to attach svcname+/Response")
-	}
+	at.rot.AttachSendChan(router.StrID("/DB/Request"), at.dbReqChan)
+	at.rot.AttachSendChan(router.StrID(svcname+"/Response"), at.svcRespChan)
 	//input_intf or recv chans
-	_, err = at.rot.AttachRecvChan(router.StrID("/Sys/Command"), at.sysCmdChan)
-	if err != nil {
-		fmt.Println(sn, " failed to attach /Sys/Command")
-	}
-	_, err = at.rot.AttachRecvChan(router.StrID(svcname+"/Command"), at.svcCmdChan)
-	if err != nil {
-		fmt.Println(sn, " failed to attach svcname+/Command")
-	}
-	_, err = at.rot.AttachRecvChan(router.StrID(svcname+"/DB/Response"), at.dbRespChan)
-	if err != nil {
-		fmt.Println(sn, " failed to attach svcname+/DB/Response")
-	}
-	_, err = at.rot.AttachRecvChan(router.StrID(svcname+"/Request"), at.svcReqChan)
-	if err != nil {
-		fmt.Println(sn, " failed to attach svcname+/Request")
-	}
+	at.rot.AttachRecvChan(router.StrID("/Sys/Command"), at.sysCmdChan)
+	at.rot.AttachRecvChan(router.StrID("/Fault/Command"+svcname), at.svcCmdChan)
+	at.rot.AttachRecvChan(router.StrID("/DB/Response"+svcname), at.dbRespChan)
+	at.rot.AttachRecvChan(router.StrID(svcname+"/Request"), at.svcReqChan)
 }
 
 func (at *ServiceTask) shutdown() {
@@ -159,8 +136,8 @@ func (at *ServiceTask) shutdown() {
 	//input_intf or recv chans
 	at.rot.DetachChan(router.StrID(svcname+"/Request"), at.svcReqChan)
 	at.rot.DetachChan(router.StrID("/Sys/Command"), at.sysCmdChan)
-	at.rot.DetachChan(router.StrID(svcname+"/Command"), at.svcCmdChan)
-	at.rot.DetachChan(router.StrID(svcname+"/DB/Response"), at.dbRespChan)
+	at.rot.DetachChan(router.StrID("/Fault/Command"+svcname), at.svcCmdChan)
+	at.rot.DetachChan(router.StrID("/DB/Response"+svcname), at.dbRespChan)
 }
 
 func (at *ServiceTask) handleCmd(cmd string) bool {
@@ -226,7 +203,7 @@ func (at *ServiceTask) handleSvcReq(req string) {
 	if at.numTrans > 3 {
 		r = at.random.Intn(1024)
 		if r == 99 {
-			at.Raise(os.NewError("app service got an error"))
+			at.Raise(errors.New("app service got an error"))
 		}
 	}
 }

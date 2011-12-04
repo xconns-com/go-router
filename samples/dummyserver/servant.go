@@ -6,10 +6,11 @@
 package main
 
 import (
-	"router"
-	"os"
 	"fmt"
 	"net"
+	"os"
+	"router"
+	"strings"
 )
 
 type ServantRole int
@@ -27,6 +28,29 @@ func (s ServantRole) String() string {
 		return "Standby"
 	}
 	return "InvalidRole"
+}
+
+//filter at conn between client and server
+type ClientFilter struct {
+	blockedPrefix []string
+}
+
+func (f *ClientFilter) BlockInward(id0 router.Id) bool {
+	return f.blocked(id0)
+}
+
+func (f *ClientFilter) BlockOutward(id0 router.Id) bool {
+	return f.blocked(id0)
+}
+
+func (f *ClientFilter) blocked(id0 router.Id) bool {
+	id := id0.(*router.StrId)
+	for _, v := range f.blockedPrefix {
+		if strings.HasPrefix(id.Val, v) {
+			return true
+		}
+	}
+	return false
 }
 
 /*
@@ -64,6 +88,9 @@ func (s *Servant) Run(done chan bool) {
 	}
 	os.Remove(addr)
 	l, _ := net.Listen("unix", addr)
+	
+	//blocked all internal ctrl msgs
+	clientFilter := &ClientFilter{[]string{"/Sys/","/Fault/","/DB/"}}
 
 	//keep accepting client conn and connect local router to it
 	for {
@@ -74,9 +101,10 @@ func (s *Servant) Run(done chan bool) {
 		}
 		fmt.Println(s.name, "connect one client")
 
-		//use flow control
-		proxy := router.NewProxy(s.Rot, "", nil, nil)
-		err = proxy.ConnectRemote(conn, router.GobMarshaling, router.FlowControl)
+		//proxy use flow control
+		//proxies will be cleaned up when client disconnect
+		proxy := router.NewProxy(s.Rot, "", clientFilter, nil)
+		err = proxy.ConnectRemote(conn, router.GobMarshaling, router.XOnOffFlowController)
 		if err != nil {
 			fmt.Println(err)
 			continue

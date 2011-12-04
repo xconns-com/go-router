@@ -7,10 +7,9 @@
 package router
 
 import (
+	"container/list"
 	"reflect"
 	"sync"
-	"container/list"
-	"os"
 )
 
 /* 
@@ -108,12 +107,10 @@ func (gch *genericMsgChan) TrySend(v reflect.Value) bool {
 }
 
 /*
- asyncChan:
+ asyncChan: a trivial async chan
  . unlimited internal buffering
  . senders never block
 */
-
-//a trivial async chan
 type asyncChan struct {
 	Channel
 	sync.Mutex
@@ -125,7 +122,7 @@ func (ac *asyncChan) Close() {
 	ac.Lock()
 	defer ac.Unlock()
 	if ac.closed {
-		panic("Close a closed chan")
+		return
 	}
 	ac.closed = true
 	if ac.buffer == nil { //no background forwarder running
@@ -156,7 +153,7 @@ func (ac *asyncChan) Send(v reflect.Value) {
 	ac.Lock()
 	defer ac.Unlock()
 	if ac.closed {
-		panic("Send on closed chan")
+		return
 	}
 	if ac.buffer == nil {
 		if ac.Channel.TrySend(v) {
@@ -196,119 +193,100 @@ func (ac *asyncChan) TrySend(v reflect.Value) bool {
 }
 
 /*
- flowChan: flow controlled channel
- . a pair of <Sender, Recver>
- . flow control between <Sender, Recver>: simple window protocol for lossless transport
- . the transport Channel between Sender, Recver should have capacity >= expected credit
+msgHandlerChan is generic msg callback handler implementing Channel interface.
+before it becomes ready, the incoming msgs are buffered, 
+when ready, buffered msgs and later msg are passed to callback handler.
+callback should finish quickly, otherwise, senders could be blocked
 */
-
-type flowChanSender struct {
-	Channel
-	creditChan chan bool
-	creditCap  int
-	credit     int
-	sync.Mutex //protect credit/creditChan change
+type msgHandlerChan struct {
+	id     Id
+	buffer *list.List
+	ready  bool
+	sync.Mutex
+	handler func(m *genericMsg)
 }
 
-func newFlowChanSender(ch Channel, credit int) (*flowChanSender, os.Error) {
-	fc := new(flowChanSender)
-	fc.Channel = ch
-	if credit <= 0 {
-		return nil, os.NewError("Flow Controlled Chan: invalid credit")
-	}
-	fc.credit = credit
-	fc.creditCap = credit
-	//for unlimited buffer, ch.Cap() return UnlimitedBuffer(-1)
-	if ch.Cap() != UnlimitedBuffer && ch.Cap() < credit {
-		return nil, os.NewError("Flow Controlled Chan: do not have enough buffering")
-	}
-	fc.creditChan = make(chan bool, 1)
-	fc.creditChan <- true //since we have credit, turn on creditChan
-	return fc, nil
+func newMsgHandlerChan(id Id, callback func(*genericMsg)) *msgHandlerChan {
+	mhc := new(msgHandlerChan)
+	mhc.id = id
+	mhc.buffer = new(list.List)
+	mhc.handler = callback
+	return mhc
 }
 
-func (fc *flowChanSender) Send(v reflect.Value) {
-	<-fc.creditChan //wait here for one credit 
-	fc.Lock()
-	fc.credit--
-	if fc.credit > 0 {
-		select {
-		case fc.creditChan <- true:
-		default:
+//the following implement Channel interface
+func (mhc *msgHandlerChan) Send(v reflect.Value) {
+	msg := &genericMsg{mhc.id, v.Interface()}
+	mhc.Lock()
+	if !mhc.ready {
+		mhc.buffer.PushBack(msg)
+	} else {
+		mhc.Unlock()
+		mhc.handler(msg)
+		return
+	}
+	mhc.Unlock()
+}
+
+func (mhc *msgHandlerChan) TrySend(v reflect.Value) bool {
+	mhc.Send(v)
+	return true
+}
+
+// the following are most placeholders
+func (mhc *msgHandlerChan) Close() {
+	//do nothing
+}
+
+func (mhc *msgHandlerChan) Recv() (reflect.Value, bool) {
+	//say it cannot be recved
+	return reflect.Zero(reflect.TypeOf(&genericMsg{})), false
+}
+
+func (mhc *msgHandlerChan) TryRecv() (reflect.Value, bool) {
+	//say it cannot be recved
+	return reflect.Zero(reflect.TypeOf(&genericMsg{})), false
+}
+
+func (mhc *msgHandlerChan) Type() reflect.Type {
+	//placeholder
+	return reflect.TypeOf(mhc)
+}
+
+func (mhc *msgHandlerChan) Interface() interface{} {
+	return mhc
+}
+
+func (mhc *msgHandlerChan) IsNil() bool {
+	return false
+}
+
+func (mhc *msgHandlerChan) Cap() int {
+	return UnlimitedBuffer
+}
+
+func (mhc *msgHandlerChan) Len() int {
+	mhc.Lock()
+	defer mhc.Unlock()
+	if !mhc.ready {
+		return mhc.buffer.Len()
+	}
+	return 0
+}
+
+//a special method to mark ready state and dispatch buffered msgs. should use Close()?
+func (mhc *msgHandlerChan) Ready() {
+	mhc.Lock()
+	if !mhc.ready {
+		mhc.ready = true
+		if mhc.buffer.Len() > 0 {
+			mhc.Unlock()
+			for e := mhc.buffer.Front(); e != nil; e = mhc.buffer.Front() {
+				mhc.handler(e.Value.(*genericMsg))
+				mhc.buffer.Remove(e)
+			}
+			return
 		}
 	}
-	fc.Unlock()
-	fc.Channel.Send(v)
-}
-
-func (fc *flowChanSender) TrySend(v reflect.Value) bool {
-	select {
-	case _ = <-fc.creditChan:
-	default:
-		return false
-	}
-	fc.Lock()
-	fc.credit--
-	if fc.credit > 0 {
-		select {
-		case fc.creditChan <- true:
-		default:
-		}
-	}
-	fc.Unlock()
-	return fc.Channel.TrySend(v)
-}
-
-func (fc *flowChanSender) Len() int {
-	fc.Lock()
-	defer fc.Unlock()
-	return fc.creditCap - fc.credit
-}
-
-func (fc *flowChanSender) Cap() int {
-	return fc.creditCap
-}
-
-func (fc *flowChanSender) ack(n int) {
-	fc.Lock()
-	defer fc.Unlock()
-	if fc.credit == 0 {
-		select {
-		case fc.creditChan <- true:
-		default:
-		}
-	}
-	fc.credit += n
-	if fc.credit > fc.creditCap {
-		fc.credit = fc.creditCap
-	}
-}
-
-func (fc *flowChanSender) Interface() interface{} {
-	return fc
-}
-
-type flowChanRecver struct {
-	Channel
-	ack func(int)
-}
-
-func (fc *flowChanRecver) Recv() (v reflect.Value, ok bool) {
-	v, ok = fc.Channel.Recv()
-	if ok {
-		fc.ack(1)
-	}
-	return
-}
-
-func (fc *flowChanRecver) TryRecv() (v reflect.Value, ok bool) {
-	v, ok = fc.Channel.TryRecv()
-	if v.IsValid() && ok {
-		fc.ack(1)
-	}
-	return
-}
-
-func (fc *flowChanRecver) Interface() interface{} {
-	return fc
+	mhc.Unlock()
 }

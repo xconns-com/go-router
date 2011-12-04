@@ -1,11 +1,11 @@
 package main
 
 import (
-	"fmt"
-	"strconv"
 	"flag"
-	"router"
+	"fmt"
 	"net"
+	"router"
+	"strconv"
 )
 
 var serverAddr string
@@ -108,7 +108,7 @@ func main() {
 
 		//create router and connect it to io conn
 		rot := router.New(router.StrID(), 32, router.BroadcastPolicy)
-		rot.ConnectRemote(conn, router.GobMarshaling, router.FlowControl)
+		rot.ConnectRemote(conn, router.GobMarshaling, router.WindowFlowController)
 
 		//hook up Pinger and Ponger
 		newPinger(rot, done, numRuns)
@@ -122,7 +122,7 @@ func main() {
 
 		//create router and connect it to io conn
 		rot := router.New(router.StrID(), 32, router.BroadcastPolicy)
-		rot.ConnectRemote(conn, router.GobMarshaling, router.FlowControl)
+		rot.ConnectRemote(conn, router.GobMarshaling, router.WindowFlowController)
 
 		//hook up Ponger
 		newPonger(rot, done)

@@ -1,10 +1,10 @@
 package main
 
 import (
-	"fmt"
-	"strconv"
 	"flag"
+	"fmt"
 	"router"
+	"strconv"
 )
 
 var showPingPong bool = true

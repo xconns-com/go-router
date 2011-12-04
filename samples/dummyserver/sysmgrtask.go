@@ -6,10 +6,10 @@
 package main
 
 import (
-	"router"
-	"time"
 	"fmt"
+	"router"
 	"strings"
+	"time"
 )
 
 /*
@@ -27,10 +27,10 @@ import (
 */
 type SysMgrTask struct {
 	//output_intf or send chans
-	htbtSendChan chan *time.Time
+	htbtSendChan chan time.Time
 	sysCmdChan   chan string
 	//input_intf or recv chans
-	htbtRecvChan chan *time.Time
+	htbtRecvChan chan time.Time
 	sysOOSChan   chan string
 	//private state
 	role          ServantRole
@@ -39,10 +39,18 @@ type SysMgrTask struct {
 	childBindChan chan *router.BindEvent
 	stopChan      chan bool
 	startChan     chan bool
-	pubChan       chan *router.ChanInfoMsg
-	unpubChan     chan *router.ChanInfoMsg
+	//remote pub/unpub chans monitor client join/leave
+	rmtPubChan   chan *router.ChanInfoMsg
+	rmtUnpubChan chan *router.ChanInfoMsg
+	//local unpub chans monitor local service clean up when client disconn
+	locUnpubChan  chan *router.ChanInfoMsg
 	pubBindChan   chan *router.BindEvent
 	unpubBindChan chan *router.BindEvent
+	//map of active services and its exit channels
+	//to avoid starting duplicate service, and
+	//for stress testing, when continuously starting a service in script
+	//make sure the last instance of same service has exited cleanly
+	exitChanMap map[string]chan bool
 }
 
 func NewSysMgrTask(r router.Router, n string, role ServantRole) *SysMgrTask {
@@ -111,50 +119,67 @@ func (smt *SysMgrTask) Run(r router.Router, n string, role ServantRole) {
 				fmt.Println("error: OOS chan closed")
 				cont = false
 			}
-		case pub, pubOpen := <-smt.pubChan:
+		case pub, pubOpen := <-smt.rmtPubChan:
 			if pubOpen {
-				/*
-					fmt.Println("SysMgrTask [", n, "] recved pubInfo: ", pub.Info)
-					fmt.Println("SysMgrTask [", n, "] print current routing map before changing")
-					sendMap := r.IdsForSend(func(id router.Id)bool{return true})
-					recvMap := r.IdsForRecv(func(id router.Id)bool{return true})
-					fmt.Println("SysMgrTask [", n, "] sendMap:")
-					for _,v := range sendMap {
-						fmt.Println("send [", n, "] ",v)
-					}
-					fmt.Println("SysMgrTask [", n, "] recvMap:")
-					for _,v := range recvMap {
-						fmt.Println("recv [", n, "] ",v)
-					}
-				*/
 				for _, v := range pub.Info {
 					id := v.Id.(*router.StrId)
 					//fmt.Printf("%s get pubMsg id:%s\n", smt.name, id)
 					data := strings.Split(id.Val, "/")
 					//fmt.Printf("%s split got:%s\n", smt.name, data)
-					if data[1] == "App" {
-						//fmt.Println(smt.name, " right bef send addService cmd")
-						smt.sysCmdChan <- fmt.Sprintf("AddService:%s", data[2])
-						fmt.Printf("%s AddService:%s\n", smt.name, data[2])
-						NewServiceTask(smt.rot, smt.name, data[2], smt.role)
+					if data[1] == "App" && data[3] == "Request" {
+						svcName := data[2]
+						exitCh, ok := smt.exitChanMap[svcName]
+						if ok {
+							//wait for old instances at both servants to exit
+							to := time.NewTimer(30e9)
+							select {
+							case <-exitCh:
+								fmt.Printf("%s OK to AddService:%s, old instance cleaned up\n", smt.name, svcName)
+							case <-to.C:
+								fmt.Printf("%s failed to AddService:%s, old instance not exit/cleanup, time out\n", smt.name, svcName)
+								continue
+							}
+							to.Stop()
+						} else {
+							exitCh = make(chan bool, 3)
+							smt.exitChanMap[svcName] = exitCh
+						}
+						smt.sysCmdChan <- fmt.Sprintf("AddService:%s", svcName)
+						fmt.Printf("%s AddService:%s\n", smt.name, svcName)
+						NewServiceTask(smt.rot, smt.name, svcName, smt.role)
 					}
 				}
 			} else {
-				fmt.Println("error: pubChan closed")
+				fmt.Println("error: rmtPubChan closed")
 				cont = false
 			}
-		case unpub, unpubOpen := <-smt.unpubChan:
+		case unpub, unpubOpen := <-smt.rmtUnpubChan:
 			if unpubOpen {
 				for _, v := range unpub.Info {
 					id := v.Id.(*router.StrId)
 					data := strings.Split(id.Val, "/")
-					if data[1] == "App" {
+					if data[1] == "App" && data[3] == "Request" {
 						smt.sysCmdChan <- fmt.Sprintf("DelService:%s", data[2])
 						fmt.Printf("%s DelService:%s\n", smt.name, data[2])
 					}
 				}
 			} else {
-				fmt.Println("error: unpubChan closed")
+				fmt.Println("error: rmtUnpubChan closed")
+				cont = false
+			}
+		case unpub2, unpubOpen2 := <-smt.locUnpubChan:
+			if unpubOpen2 {
+				for _, v := range unpub2.Info {
+					id := v.Id.(*router.StrId)
+					data := strings.Split(id.Val, "/")
+					if data[1] == "App" && data[3] == "Response" {
+						//one service exits and namespace is cleaned up
+						smt.exitChanMap[data[2]] <- true
+						fmt.Printf("%s Service[%s] exit and cleanup\n", smt.name, data[2])
+					}
+				}
+			} else {
+				fmt.Println("error: locUnpubChan closed")
 				cont = false
 			}
 		}
@@ -168,13 +193,14 @@ func (smt *SysMgrTask) init(r router.Router, n string, role ServantRole) {
 	smt.rot = r
 	smt.name = n
 	smt.role = role
-	smt.htbtSendChan = make(chan *time.Time)
-	smt.htbtRecvChan = make(chan *time.Time)
+	smt.htbtSendChan = make(chan time.Time)
+	smt.htbtRecvChan = make(chan time.Time)
 	smt.sysCmdChan = make(chan string)
 	smt.sysOOSChan = make(chan string)
 	smt.childBindChan = make(chan *router.BindEvent, 1)
 	smt.startChan = make(chan bool, 1)
 	smt.stopChan = make(chan bool, 1)
+	smt.exitChanMap = make(map[string]chan bool)
 	//output_intf or send chans
 	smt.rot.AttachSendChan(router.StrID("/Sys/Command"), smt.sysCmdChan, smt.childBindChan)
 	smt.rot.AttachSendChan(router.StrID("/Sys/Ctrl/Heartbeat", router.ScopeRemote), smt.htbtSendChan)
@@ -182,26 +208,29 @@ func (smt *SysMgrTask) init(r router.Router, n string, role ServantRole) {
 	smt.rot.AttachRecvChan(router.StrID("/Sys/Ctrl/Heartbeat", router.ScopeRemote), smt.htbtRecvChan)
 	smt.rot.AttachRecvChan(router.StrID("/Sys/OutOfService"), smt.sysOOSChan)
 	//
-	smt.pubChan = make(chan *router.ChanInfoMsg)
-	smt.unpubChan = make(chan *router.ChanInfoMsg)
+	smt.rmtPubChan = make(chan *router.ChanInfoMsg)
+	smt.rmtUnpubChan = make(chan *router.ChanInfoMsg)
+	smt.locUnpubChan = make(chan *router.ChanInfoMsg)
 	//use pubBindChan/unpubBindChan when attaching chans to PubId/UnPubId, so that they will not be
 	//closed when all clients close and leave
 	smt.pubBindChan = make(chan *router.BindEvent, 1)
 	smt.unpubBindChan = make(chan *router.BindEvent, 1)
-	smt.rot.AttachRecvChan(smt.rot.NewSysID(router.PubId, router.ScopeRemote), smt.pubChan, smt.pubBindChan)
-	smt.rot.AttachRecvChan(smt.rot.NewSysID(router.UnPubId, router.ScopeRemote), smt.unpubChan, smt.unpubBindChan)
+	smt.rot.AttachRecvChan(smt.rot.NewSysID(router.PubId, router.ScopeRemote), smt.rmtPubChan, smt.pubBindChan)
+	smt.rot.AttachRecvChan(smt.rot.NewSysID(router.UnPubId, router.ScopeRemote), smt.rmtUnpubChan, smt.unpubBindChan)
+	smt.rot.AttachRecvChan(smt.rot.NewSysID(router.UnPubId, router.ScopeLocal), smt.locUnpubChan)
 }
 
 func (smt *SysMgrTask) shutdown() {
 	//output_intf or send chans
 	smt.rot.DetachChan(router.StrID("/Sys/Command"), smt.sysCmdChan)
-	smt.rot.DetachChan(router.StrID("/Sys/Ctrl/Heartbeat"), smt.htbtSendChan)
+	smt.rot.DetachChan(router.StrID("/Sys/Ctrl/Heartbeat", router.ScopeRemote), smt.htbtSendChan)
 	//input_intf or recv chans
-	smt.rot.DetachChan(router.StrID("/Sys/Ctrl/Heartbeat"), smt.htbtRecvChan)
+	smt.rot.DetachChan(router.StrID("/Sys/Ctrl/Heartbeat", router.ScopeRemote), smt.htbtRecvChan)
 	smt.rot.DetachChan(router.StrID("/Sys/OutOfService"), smt.sysOOSChan)
 	//
-	smt.rot.DetachChan(smt.rot.NewSysID(router.PubId, router.ScopeRemote), smt.pubChan)
-	smt.rot.DetachChan(smt.rot.NewSysID(router.UnPubId, router.ScopeRemote), smt.unpubChan)
+	smt.rot.DetachChan(smt.rot.NewSysID(router.PubId, router.ScopeRemote), smt.rmtPubChan)
+	smt.rot.DetachChan(smt.rot.NewSysID(router.UnPubId, router.ScopeRemote), smt.rmtUnpubChan)
+	smt.rot.DetachChan(smt.rot.NewSysID(router.UnPubId, router.ScopeLocal), smt.locUnpubChan)
 }
 
 //standby servant will monitor heartbeat from active Servant, if missing 2 in a row, come up active
@@ -252,7 +281,7 @@ L1:
 		}
 		//send heartbeat
 		select {
-		case smt.htbtSendChan <- time.LocalTime():
+		case smt.htbtSendChan <- time.Now().Local():
 		default:
 		}
 		time.Sleep(2e8)

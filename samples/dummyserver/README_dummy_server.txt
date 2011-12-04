@@ -30,7 +30,7 @@ For our dummy server, i'll use path names as ids and partition the systems as fo
 
 <1> SystemManager Task
     To make our server reliable, let's have two server instances running at the same time, one active (serving the requests), one standby (ready to replace the active one)
-    SysteManager at standby server monitors the heartbeats from active server, if 2 heartbeats miss in a row, standby will become active and start serving user requests
+    SystemManager at standby server monitors the heartbeats from active server, if 2 heartbeats miss in a row, standby will become active and start serving user requests
     SystemManager at active server will send heartbeats to standby, and send commands to other tasks to drive their life cycle.
    A> messages sent
       /Sys/Ctrl/Heartbeat

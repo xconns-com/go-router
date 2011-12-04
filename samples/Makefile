@@ -1,7 +1,7 @@
 include $(GOROOT)/src/Make.inc
 
 # build executables
-all: test chatcli chatsrv pingpong1 pingpong2 pingpong3 pingpong4 pingpong5 client server
+all: test chatcli chatsrv pingpong1 pingpong2 pingpong3 pingpong4 pingpong5 client server pingpong6
 
 test: package
 	$(GC) -I../_obj test.go
@@ -43,6 +43,11 @@ pingpong5: package
 	$(LD) -L../_obj -o $@ pingpong5.$O
 	@echo "Done. Executable is: $@"
 
+pingpong6: package
+	$(GC) -I../_obj pingpong6.go
+	$(LD) -L../_obj -o $@ pingpong6.$O
+	@echo "Done. Executable is: $@"
+
 client: package
 	$(GC) -I../_obj dummyserver/client.go
 	$(LD) -L../_obj -o $@ client.$O
@@ -62,7 +67,7 @@ server: package
 	@echo "Done. Executable is: $@"
 
 clean:
-	rm -rf *.[$(OS)o] *.a [$(OS)].out _obj _test _testmain.go main test chatcli chatsrv pingpong1 pingpong2 pingpong3 pingpong4 pingpong5 client server
+	rm -rf *.[$(OS)o] *.a [$(OS)].out _obj _test _testmain.go main test chatcli chatsrv pingpong1 pingpong2 pingpong3 pingpong4 pingpong5 pingpong6 client server
 
 nuke: 	clean
 

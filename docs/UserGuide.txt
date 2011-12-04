@@ -39,8 +39,8 @@ type Router interface {
 	//Connect to a remote router thru io conn
 	//1. io.ReadWriteCloser: transport connection
 	//2. MarshalingPolicy: gob or json marshaling
-	//3. bool flag: turn on flow control on connection
-	ConnectRemote(io.ReadWriteCloser, MarshalingPolicy, ...bool) (Proxy, os.Error)
+	//3. remaining args can be a FlowControlPolicy (e.g. window based or XOnOff)
+	ConnectRemote(io.ReadWriteCloser, MarshalingPolicy, ...interface{}) (Proxy, error)
 
 	//--- other utils ---
 	//return pre-created SysIds according to the router's id-type, with ScopeGlobal / MemberLocal
@@ -80,18 +80,23 @@ more detials can be found in the following.
 
 1.2 Proxy
 
-Proxy is the primary interface to connect router to its peer router. At both ends of a connection, there is a proxy object for its router. Simple router connection can be set up thru calling Router.Connect(). Proxy.Connect()/ConnectRemote() are used to set up more connections details, such as setting IdFilter to allow only a subset of messages pass thru the connection, or setting IdTranslator which can "relocate" remote message ids into a subspace in local router's namespace.
-Proxy.Close() is called to disconnect router from its peer.
+Proxy is the primary interface to connect router to its peer router. At both ends of a connection, there is a proxy object for its router. Simple router connection can be set up thru calling Router.Connect(). Proxy.Connect() can be used to set up more complicated connections, such as setting IdFilter to allow only a subset of messages pass thru the connection, or setting IdTranslator which can "relocate" remote message ids into a subspace in local router's namespace, or setting a flow control policy. Proxy.Close() is called to disconnect router from its peer.
 
 type Proxy interface {
-	Connect(Proxy) os.Error
-	ConnectRemote(io.ReadWriteCloser, MarshalingPolicy, ...bool) os.Error
+	//Connect to a local router
+	Connect(Proxy) error
+	//Connect to a remote router thru io conn
+	//1. io.ReadWriteCloser: transport connection
+	//2. MarshalingPolicy: gob or json marshaling
+	//3. remaining args can be a FlowControlPolicy (e.g. window based or XOnOff)
+	ConnectRemote(io.ReadWriteCloser, MarshalingPolicy, ...interface{}) error
+	//close proxy and disconnect from peer
 	Close()
 	//query messaging interface with peer
-	LocalPubInfo() []*IdChanInfo
-	LocalSubInfo() []*IdChanInfo
-	PeerPubInfo() []*IdChanInfo
-	PeerSubInfo() []*IdChanInfo
+	LocalPubInfo() []*ChanInfo
+	LocalSubInfo() []*ChanInfo
+	PeerPubInfo() []*ChanInfo
+	PeerSubInfo() []*ChanInfo
 }
 
 func NewProxy(r Router, name string, f IdFilter, t IdTranslator) Proxy
@@ -105,6 +110,7 @@ NewProxy(...) accepts the following arguments:
 The components plugged into Proxy are:
     . Marshaling: there are two predefined marshaling polcies: GobMarshaling use package "gob" and JsonMarshaling use package "json".
     . IdFilter and IdTranslator: there are no predefined filters and translators; applications can define them with application specific rules.
+    . FlowController: there are two predefined flow control policies: simple window protocol and x-on/x-off protocol.
 
 More details about components can be found in following.
 
@@ -191,7 +197,7 @@ type Marshaler interface {
 }
 
 type Demarshaler interface {
-	Demarshal(interface{}, reflect.Value) os.Error
+	Demarshal(interface{}) os.Error
 }
 
 type MarshallingPolicy interface {
@@ -235,3 +241,31 @@ type IdTranslator interface {
 
 Customized filters and translators can be defined according the above interfaces and with application specific logic.
 
+2.5 Flow control
+
+For remote router connections, multiple sender-recver pair connections are multiplexed over the same io stream. For synchronization and congestion avoidance, we could apply flow control policy.
+
+a flow control protocol has two parts:
+    sender: which send msgs and recv acks from recver.
+    recver: which recv msgs and send acks to sender.
+So besides wrapping a transport Channel (for send/recv msgs)
+    FlowSender expose Ack(int) method to recv acks
+    FlowRecver constructor will take as argument an ack(int) callback for sending acks.
+The following three interfaces are implemented for each flow control policy:
+
+type FlowControlPolicy interface {
+	NewFlowSender(ch Channel, args ...interface{}) (FlowSender, error)
+	NewFlowRecver(ch Channel, ack func(int), args ...interface{}) (FlowRecver, error)
+	String() string
+}
+
+type FlowSender interface {
+	Channel
+	Ack(int)
+}
+
+type FlowRecver interface {
+	Channel
+}
+
+There are two predefined flow control policies: Windowing and XOnOff, which are based on Chapter 4 of "Design And Validation Of Computer Protocols" by Gerard J. Holzmann.

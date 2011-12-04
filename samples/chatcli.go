@@ -6,12 +6,12 @@
 package main
 
 import (
-	"net"
-	"fmt"
-	"flag"
-	"router"
-	"os"
 	"bufio"
+	"flag"
+	"fmt"
+	"net"
+	"os"
+	"router"
 )
 
 type Subject struct {
@@ -68,7 +68,7 @@ func (c *Chatter) Leave(s string) {
 	if !ok {
 		return
 	}
-	c.subjectMap[s] = subj, false
+	delete(c.subjectMap, s)
 	c.r.DetachChan(router.StrID(s, router.ScopeRemote), subj.recvChan)
 	c.r.DetachChan(router.StrID(s, router.ScopeRemote), subj.sendChan)
 }

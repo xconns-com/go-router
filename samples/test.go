@@ -8,9 +8,9 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"router"
 	"strings"
-	"net"
 	"time"
 )
 
@@ -295,8 +295,6 @@ func test_local_conn() {
 	<-done
 	<-done
 	<-done
-	//wait for printouts
-	//time.Sleep(1e9)
 	rout1.Close()
 	rout2.Close()
 }
@@ -479,8 +477,8 @@ func test_remote_conn() {
 
 func test_async_router() {
 	//create a async router by setting buffer size to UnlimitedBuffer(-1) in router.New()
-	rout1 := router.New(router.IntID(), router.UnlimitedBuffer, router.BroadcastPolicy)
-	rout2 := router.New(router.IntID(), router.UnlimitedBuffer, router.BroadcastPolicy)
+	rout1 := router.New(router.IntID(), router.UnlimitedBuffer, router.BroadcastPolicy /* , "router1", router.ScopeLocal*/ )
+	rout2 := router.New(router.IntID(), router.UnlimitedBuffer, router.BroadcastPolicy /* , "router2", router.ScopeLocal*/ )
 	rout1.Connect(rout2)
 	chi1 := make(chan string)
 	chi2 := make(chan string)
@@ -546,8 +544,8 @@ func test_flow_control() {
 		}
 		fmt.Println("server start")
 		rout1 := router.New(router.IntID(), 5, router.BroadcastPolicy /*, "router1", router.ScopeLocal*/ )
-		//set FlowControl(true) flag to turn on flow control on connection stream
-		_, err = rout1.ConnectRemote(conn, router.GobMarshaling, router.FlowControl)
+		//set FlowControl to turn on flow control on connection stream
+		_, err = rout1.ConnectRemote(conn, router.GobMarshaling, router.WindowFlowController)
 		if err != nil {
 			fmt.Println(err)
 		} else {
@@ -559,9 +557,10 @@ func test_flow_control() {
 			<-bound
 			//start sending msgs
 			go func() {
-				for i := 0; i < 20; i++ {
+				for i := 0; i < 30; i++ {
 					cho <- i
 					fmt.Println("client sent: ", i)
+					time.Sleep(1e8)
 				}
 				close(cho)
 				done <- true
@@ -584,8 +583,8 @@ func test_flow_control() {
 		}
 		fmt.Println("client connect")
 		rout2 := router.New(router.IntID(), 5, router.BroadcastPolicy /*, "router2", router.ScopeLocal*/ )
-		//set true flag to turn on flow control
-		_, err = rout2.ConnectRemote(conn, router.GobMarshaling, router.FlowControl)
+		//turn on flow control
+		_, err = rout2.ConnectRemote(conn, router.GobMarshaling, router.WindowFlowController)
 		if err != nil {
 			fmt.Println(err)
 		} else {
@@ -597,7 +596,7 @@ func test_flow_control() {
 			go func() {
 				for v := range chi2 {
 					fmt.Println("router2/sink2 got: ", v)
-					if v < 3 {
+					if v < 10 {
 						time.Sleep(1e9)
 					}
 				}
@@ -641,13 +640,11 @@ func main() {
 	test_remote_conn()
 	fmt.Println("-------test_async_router-------")
 	test_async_router()
+	fmt.Println("-------test_flow_control (internal buffer size = 5)-------")
+	test_flow_control()
 	/*
-		fmt.Println("-------test_flow_control (internal buffer size = 5)-------")
-		test_flow_control()
-	*/
-	/*
-		fmt.Println("-------test_logger-------")
-		test_logger()
+	 fmt.Println("-------test_logger-------")
+	 test_logger()
 	*/
 	fmt.Println("-------All Tests Done------")
 }
