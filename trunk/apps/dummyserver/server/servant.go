@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"router"
+	"code.google.com/p/go-router/trunk/router"
 	"strings"
 )
 

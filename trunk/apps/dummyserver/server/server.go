@@ -6,7 +6,7 @@
 package main
 
 import (
-	"router"
+	"code.google.com/p/go-router/trunk/router"
 )
 
 //define a filter to allow only heartbeat msgs between active and
