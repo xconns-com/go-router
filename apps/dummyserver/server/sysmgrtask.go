@@ -7,7 +7,7 @@ package main
 
 import (
 	"fmt"
-	"router"
+	"code.google.com/p/go-router/trunk/router"
 	"strings"
 	"time"
 )
