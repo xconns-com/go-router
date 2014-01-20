@@ -193,7 +193,7 @@ func (ac *asyncChan) TrySend(v reflect.Value) bool {
 }
 
 /*
-msgHandlerChan is generic msg callback handler implementing Channel interface.
+msgHandlerChan is generic msg callback handler implementing SendChan interface.
 before it becomes ready, the incoming msgs are buffered, 
 when ready, buffered msgs and later msg are passed to callback handler.
 callback should finish quickly, otherwise, senders could be blocked

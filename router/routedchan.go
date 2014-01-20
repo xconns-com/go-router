@@ -8,13 +8,7 @@ package router
 
 import (
 	"sync"
-)
-
-type ChanDirection int
-
-const (
-	Send ChanDirection = iota
-	Recv
+	"reflect"
 )
 
 type operType int
@@ -39,7 +33,7 @@ type oper struct {
     4. Detach() - detach the channel from router
 */
 type RoutedChan struct {
-	Kind         ChanDirection
+	Dir         reflect.ChanDir
 	Id           Id
 	Channel      //external SendChan/RecvChan, attached by clients
 	router       *routerImpl
@@ -54,14 +48,14 @@ type RoutedChan struct {
 	detached     bool
 }
 
-func newRoutedChan(id Id, t ChanDirection, ch Channel, r *routerImpl, bc chan *BindEvent) *RoutedChan {
+func newRoutedChan(id Id, t reflect.ChanDir, ch Channel, r *routerImpl, bc chan *BindEvent) *RoutedChan {
 	routCh := &RoutedChan{}
-	routCh.Kind = t
+	routCh.Dir = t
 	routCh.Id = id
 	routCh.Channel = ch
 	routCh.router = r
 	routCh.bindChan = bc
-	if t == Send {
+	if t == reflect.SendDir {
 		routCh.bindCond = sync.NewCond(&routCh.bindLock)
 	}
 	return routCh
@@ -73,11 +67,12 @@ func (e *RoutedChan) Interface() interface{} {
 
 //override Channel.Close() method
 func (e *RoutedChan) Close() {
-	if e.Kind == Send {
+	if e.Dir == reflect.SendDir {
 		//recover panic to handle race(close twice) when proxy destroy and a sender chan close from outside of router at the same time
 		defer func() {
 			_ = recover()
 		}()
+
 		//wake up sender goroutine blocked waiting for peers
 		e.bindLock.Lock()
 		e.detached = true
@@ -117,7 +112,7 @@ func (e *RoutedChan) Peers() (copySet []*RoutedChan) {
 }
 
 func (e *RoutedChan) start(disp DispatchPolicy) {
-	if e.Kind == Send {
+	if e.Dir == reflect.SendDir {
 		e.dispatcher = disp.NewDispatcher()
 		go e.senderLoop()
 	}
@@ -161,12 +156,12 @@ func (e *RoutedChan) runPendingOps() {
 		switch op.kind {
 		case attachOp:
 			e.attachImpl(op.peer)
-			if e.Kind == Send {
+			if e.Dir == reflect.SendDir {
 				op.peer.attach(e)
 			}
 		case detachOp:
 			e.detachImpl(op.peer)
-			if e.Kind == Send {
+			if e.Dir == reflect.SendDir {
 				op.peer.detach(e)
 			}
 		}
@@ -194,7 +189,7 @@ func (e *RoutedChan) attachImpl(p *RoutedChan) {
 			}
 		}
 	}
-	if e.Kind == Send && len(e.bindings) == 1 { //first recver attached
+	if e.Dir == reflect.SendDir && len(e.bindings) == 1 { //first recver attached
 		e.bindCond.Broadcast()
 	}
 }
@@ -206,18 +201,19 @@ func (e *RoutedChan) attach(p *RoutedChan) {
 		e.opBuf = append(e.opBuf, &oper{attachOp, p})
 	} else {
 		e.attachImpl(p)
-		if e.Kind == Send {
+		if e.Dir == reflect.SendDir {
 			p.attach(e)
 		}
 	}
 }
 
 func (e *RoutedChan) detachImpl(p *RoutedChan) {
-	n := len(e.bindings)
 	for i, v := range e.bindings {
 		if v == p {
-			e.bindings[i] = nil
-			e.bindings = append(e.bindings[:i], e.bindings[i+1:]...)
+			n := len(e.bindings)
+			copy(e.bindings[i:], e.bindings[i+1:])
+			e.bindings[n-1] = nil
+			e.bindings = e.bindings[:n-1]
 			if e.bindChan != nil {
 				//KeepLatest non-blocking send
 			L:
@@ -231,8 +227,8 @@ func (e *RoutedChan) detachImpl(p *RoutedChan) {
 				}
 			}
 			if len(e.bindings) == 0 {
-				switch e.Kind {
-				case Recv:
+				switch e.Dir {
+				case reflect.RecvDir:
 					//for recver, if all senders Detached
 					//send EndOfData to notify possible pending goroutine
 					if e.bindChan != nil {
@@ -276,7 +272,7 @@ func (e *RoutedChan) detach(p *RoutedChan) {
 		e.opBuf = append(e.opBuf, &oper{detachOp, p})
 	} else {
 		e.detachImpl(p)
-		if e.Kind == Send {
+		if e.Dir == reflect.SendDir {
 			p.detach(e)
 		}
 	}

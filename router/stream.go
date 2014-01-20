@@ -232,6 +232,7 @@ func (s *stream) recv() (err error) {
 		if id.Scope() == NumScope && id.Member() == NumMembership { //chan is closed
 			peerChan.Close()
 			s.Log(LOG_INFO, fmt.Sprintf("close proxy forwarding chan for %v", id))
+			return
 		}
 		chanType := peerChan.Type()
 		if chanType == nil {

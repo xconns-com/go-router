@@ -64,7 +64,7 @@ func (n notifier) notify(idx int, info *ChanInfo) {
 	if n.closed {
 		return
 	}
-	n.router.Log(LOG_INFO, fmt.Sprintf("notify: %v, %v", sysIdxString(idx), info.Id))
+	n.router.Log(LOG_INFO, fmt.Sprintf("notify: %v, %v", sysIdxString[idx], info.Id))
 	nc := n.notifyChans[idx-PubId]
 	if nc.routCh.NumPeers() > 0 {
 		nc.asyncCh.Send(reflect.ValueOf(&ChanInfoMsg{Info: []*ChanInfo{info}}))
