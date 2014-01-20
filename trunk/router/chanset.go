@@ -17,20 +17,14 @@ import (
 * Groups of chans at proxy
  */
 
-//ChanSet groups a set of chans at proxy with the same direction (Send or Recv)
-//and same scope and membership
-type chanInSet struct {
-	id     Id
-	ch     Channel
-	routCh *RoutedChan
-}
-
+//ChanSet groups a set of routed_chans at proxy with 
+//the same direction (Send or Recv) and same scope and membership
 type chanSet struct {
 	router *routerImpl
 	proxy  *proxyImpl
 	scope  int
 	member int
-	chans  map[interface{}]*chanInSet
+	chans  map[interface{}]*RoutedChan
 }
 
 func newChanSet(p *proxyImpl, s int, m int) *chanSet {
@@ -39,7 +33,7 @@ func newChanSet(p *proxyImpl, s int, m int) *chanSet {
 	cs.proxy = p
 	cs.scope = s
 	cs.member = m
-	cs.chans = make(map[interface{}]*chanInSet)
+	cs.chans = make(map[interface{}]*RoutedChan)
 	return cs
 }
 
@@ -49,7 +43,7 @@ func (cs *chanSet) findChan(id Id) (Channel, int) {
 	if !ok {
 		return nil, -1
 	}
-	return r.ch, r.routCh.NumPeers()
+	return r.Channel, r.NumPeers()
 }
 
 func (cs *chanSet) BindingCount(id Id) int {
@@ -57,7 +51,7 @@ func (cs *chanSet) BindingCount(id Id) int {
 	if !ok {
 		return -1
 	}
-	return r.routCh.NumPeers()
+	return r.NumPeers()
 }
 
 func (cs *chanSet) DelChan(id Id) error {
@@ -66,7 +60,7 @@ func (cs *chanSet) DelChan(id Id) error {
 		return errors.New("router chanSet: DelChan id doesnt exist")
 	}
 	delete(cs.chans, id.Key())
-	err := cs.router.DetachChan(r.id, r.ch.Interface())
+	err := cs.router.DetachChan(r.Id, r.Channel.Interface())
 	if err != nil {
 		cs.router.LogError(err)
 	}
@@ -76,7 +70,7 @@ func (cs *chanSet) DelChan(id Id) error {
 func (cs *chanSet) Close() {
 	for k, r := range cs.chans {
 		delete(cs.chans, k)
-		err := cs.router.DetachChan(r.id, r.ch.Interface())
+		err := cs.router.DetachChan(r.Id, r.Channel.Interface())
 		if err != nil {
 			cs.router.LogError(err)
 		}
@@ -95,26 +89,25 @@ func (rcs *recvChanSet) AddRecver(id Id, ch Channel, credit int) (err error) {
 		return
 	}
 	rt := rcs.router
-	r := new(chanInSet)
-	r.id, _ = id.Clone(rcs.scope, rcs.member)
-	rcs.router.Log(LOG_INFO, fmt.Sprintf("enter1 add recver for %v, credit %v, async %v, flow not null %v", r.id, credit, rcs.router.async, rcs.proxy.flowController != nil))
-	r.ch = ch
+	rid, _ := id.Clone(rcs.scope, rcs.member)
+	rcs.router.Log(LOG_INFO, fmt.Sprintf("enter1 add recver for %v, credit %v, async %v, flow not null %v", rid, credit, rcs.router.async, rcs.proxy.flowController != nil))
+	rch := ch
 	if !rcs.router.async && rcs.proxy.flowController != nil {
-		rcs.router.Log(LOG_INFO, fmt.Sprintf("enter2 add recver for %v", r.id))
+		rcs.router.Log(LOG_INFO, fmt.Sprintf("enter2 add recver for %v", rid))
 		//attach flow control adapter to stream chan recver
-		r.ch, err = rcs.proxy.flowController.NewFlowSender(ch, credit)
+		rch, err = rcs.proxy.flowController.NewFlowSender(ch, credit)
 		if err != nil {
-			rcs.router.Log(LOG_INFO, fmt.Sprintf("fail to add flow sender: %v %v", r.id, credit))
+			rcs.router.Log(LOG_INFO, fmt.Sprintf("fail to add flow sender: %v %v", rid, credit))
 			return
 		}
-		rcs.router.Log(LOG_INFO, fmt.Sprintf("add flow sender: %v %v", r.id, credit))
+		rcs.router.Log(LOG_INFO, fmt.Sprintf("add flow sender: %v %v", rid, credit))
 	}
-	r.routCh, err = rt.AttachRecvChan(r.id, r.ch.Interface())
+	routCh, err := rt.AttachRecvChan(rid, rch.Interface())
 	if err != nil {
 		return
 	}
-	rcs.chans[r.id.Key()] = r
-	rcs.router.Log(LOG_INFO, fmt.Sprintf("add recver for %v", r.id))
+	rcs.chans[rid.Key()] = routCh
+	rcs.router.Log(LOG_INFO, fmt.Sprintf("add recver for %v", rid))
 	return
 }
 
@@ -130,36 +123,36 @@ func (scs *sendChanSet) AddSender(id Id, chanType reflect.Type) (err error) {
 		return
 	}
 	rt := scs.router
-	s := new(chanInSet)
-	s.id, _ = id.Clone(scs.scope, scs.member)
+	sid, _ := id.Clone(scs.scope, scs.member)
 	buflen := rt.recvChanBufSize(id)
 	if id.SysIdIndex() >= 0 {
 		buflen = DefCmdChanBufSize
 	}
-	s.ch = reflect.MakeChan(chanType, buflen)
-	if s.id.SysIdIndex() >= 0 { 
+	var sch Channel
+	sch = reflect.MakeChan(chanType, buflen)
+	if sid.SysIdIndex() >= 0 { 
 		//NO flow control for sys chans, make it unlimited buffered
 		//so that it will not block namespace change propogating goroutine
-		s.ch = &asyncChan{Channel:s.ch}
-		scs.router.Log(LOG_INFO, fmt.Sprintf("add async recver: %v", s.id))
+		sch = &asyncChan{Channel:sch}
+		scs.router.Log(LOG_INFO, fmt.Sprintf("add async recver: %v", sid))
 	} else if !scs.router.async && scs.proxy.flowController != nil {
 		//attach flow control adapters for stream send chans
-		s.ch, err = scs.proxy.flowController.NewFlowRecver(
-			s.ch,
+		sch, err = scs.proxy.flowController.NewFlowRecver(
+			sch,
 			func(n int) {
-				scs.proxy.peer.sendCtrlMsg(&genericMsg{rt.SysID(ReadyId), &ConnReadyMsg{[]*ChanReadyInfo{&ChanReadyInfo{s.id, n}}}})
+				scs.proxy.peer.sendCtrlMsg(&genericMsg{rt.SysID(ReadyId), &ConnReadyMsg{[]*ChanReadyInfo{&ChanReadyInfo{sid, n}}}})
 			})
 		if err != nil {
 			return
 		}
-		scs.router.Log(LOG_INFO, fmt.Sprintf("add flow recver: %v", s.id))
+		scs.router.Log(LOG_INFO, fmt.Sprintf("add flow recver: %v", sid))
 	}
-	s.routCh, err = rt.AttachSendChan(s.id, s.ch.Interface())
+	routCh, err := rt.AttachSendChan(sid, sch.Interface())
 	if err != nil {
 		return
 	}
-	scs.chans[s.id.Key()] = s
-	scs.router.Log(LOG_INFO, fmt.Sprintf("add sender for %v", s.id))
+	scs.chans[sid.Key()] = routCh
+	scs.router.Log(LOG_INFO, fmt.Sprintf("add sender for %v", sid))
 	return
 }
 

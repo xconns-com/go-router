@@ -20,15 +20,7 @@ const (
 )
 
 //return the string values of membership
-func MemberString(m int) string {
-	switch m {
-	case MemberLocal:
-		return "MemberLocal"
-	case MemberRemote:
-		return "MemberRemote"
-	}
-	return "InvalidMembership"
-}
+var memberString []string = []string{"MemberLocal", "MemberRemote", "InvalidMembership"}
 
 //Scope is the scope to publish/subscribe (or send/recv) msgs
 const (
@@ -39,17 +31,7 @@ const (
 )
 
 //return string values of Scope
-func ScopeString(s int) string {
-	switch s {
-	case ScopeLocal:
-		return "ScopeLocal"
-	case ScopeRemote:
-		return "ScopeRemote"
-	case ScopeGlobal:
-		return "ScopeGlobal"
-	}
-	return "InvalidScope"
-}
+var scopeString []string = []string{"ScopeLocal", "ScopeRemote", "ScopeGlobal"}
 
 //MatchType describes the types of namespaces and match algorithms used for id-matching
 type MatchType int
@@ -75,9 +57,9 @@ type Id interface {
 
 	//Generators for creating other ids of same type. Since often we don't
 	//know the exact types of Id.Val, so we have to create new ones from an existing id
+	Clone(...int) (Id, error)      //create a new id with same id, but possible diff scope & membership
 	SysID(int, ...int) (Id, error) //generate sys ids, also called as method of Router
 	SysIdIndex() int               //return (0 - NumSysInternalIds) for SysIds, return -1 for others
-	Clone(...int) (Id, error)      //create a new id with same id, but possible diff scope & membership
 
 	//Stringer interface
 	String() string
@@ -103,31 +85,7 @@ const (
 	NumSysInternalIds
 )
 
-func sysIdxString(idx int) string {
-	switch idx {
-	case ConnId:
-		return "ConnId"
-	case DisconnId:
-		return "DisconnId"
-	case ErrorId:
-		return "ErrorId"
-	case ReadyId:
-		return "ReadyId"
-	case PubId:
-		return "PubId"
-	case UnPubId:
-		return "UnPubId"
-	case SubId:
-		return "SubId"
-	case UnSubId:
-		return "UnSubId"
-	case RouterLogId:
-		return "RouterLogId"
-	case RouterFaultId:
-		return "RouterFaultId"
-	}
-	return "Undefined_Sys_Id"
-}
+var sysIdxString []string = []string {"ConnId", "DisconnId", "ErrorId", "ReadyId", "PubId", "UnPubId", "SubId", "UnSubId", "RouterLogId", "RouterFaultId"}
 
 //A function used as predicate in router.idsForSend()/idsForRecv() to find all ids in a router's
 //namespace which are exported to outside
@@ -169,7 +127,7 @@ func (id IntId) MatchType() MatchType { return ExactMatch }
 func (id IntId) Scope() int  { return id.ScopeVal }
 func (id IntId) Member() int { return id.MemberVal }
 func (id IntId) String() string {
-	return fmt.Sprintf("%d_%s_%s", id.Val, ScopeString(id.ScopeVal), MemberString(id.MemberVal))
+	return fmt.Sprintf("%d_%s_%s", id.Val, scopeString[id.ScopeVal], memberString[id.MemberVal])
 }
 //define 8 system msg ids
 var IntSysIdBase int = -10101 //Base value for SysIds of IntId
@@ -231,7 +189,7 @@ func (id StrId) MatchType() MatchType { return ExactMatch }
 func (id StrId) Scope() int  { return id.ScopeVal }
 func (id StrId) Member() int { return id.MemberVal }
 func (id StrId) String() string {
-	return fmt.Sprintf("%s_%s_%s", id.Val, ScopeString(id.ScopeVal), MemberString(id.MemberVal))
+	return fmt.Sprintf("%s_%s_%s", id.Val, scopeString[id.ScopeVal], memberString[id.MemberVal])
 }
 //define 8 system msg ids
 var StrSysIdBase string = "-10101" //Base value for SysIds of StrId
@@ -321,7 +279,7 @@ func (id PathId) MatchType() MatchType { return PrefixMatch }
 func (id PathId) Scope() int  { return id.ScopeVal }
 func (id PathId) Member() int { return id.MemberVal }
 func (id PathId) String() string {
-	return fmt.Sprintf("%s_%s_%s", id.Val, ScopeString(id.ScopeVal), MemberString(id.MemberVal))
+	return fmt.Sprintf("%s_%s_%s", id.Val, scopeString[id.ScopeVal], memberString[id.MemberVal])
 }
 //define 8 system msg ids
 var PathSysIdBase string = "/10101" //Base value for SysIds of PathId
@@ -393,7 +351,7 @@ func (id MsgId) MatchType() MatchType { return ExactMatch }
 func (id MsgId) Scope() int  { return id.ScopeVal }
 func (id MsgId) Member() int { return id.MemberVal }
 func (id MsgId) String() string {
-	return fmt.Sprintf("%v_%s_%s", id.Val, ScopeString(id.ScopeVal), MemberString(id.MemberVal))
+	return fmt.Sprintf("%v_%s_%s", id.Val, scopeString[id.ScopeVal], memberString[id.MemberVal])
 }
 //define 8 system msg ids
 var MsgSysIdBase MsgTag = MsgTag{-10101, -10101} //Base value for SysIds of MsgId

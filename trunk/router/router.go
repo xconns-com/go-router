@@ -211,7 +211,7 @@ func (s *routerImpl) AttachSendChan(id Id, v interface{}, args ...interface{}) (
 			return
 		}
 	}
-	routCh = newRoutedChan(id, Send, ch, s, bindChan)
+	routCh = newRoutedChan(id, reflect.SendDir, ch, s, bindChan)
 	routCh.internalChan = internalChan
 	err = s.attach(routCh)
 	if err != nil {
@@ -274,7 +274,7 @@ func (s *routerImpl) AttachRecvChan(id Id, v interface{}, args ...interface{}) (
 		//ie. Cap()==-1, all undelivered msgs will be buffered right before ext recv chans
 		ch = &asyncChan{Channel: ch}
 	}
-	routCh = newRoutedChan(id, Recv, ch, s, bindChan)
+	routCh = newRoutedChan(id, reflect.RecvDir, ch, s, bindChan)
 	routCh.internalChan = internalChan
 	err = s.attach(routCh)
 	if err != nil {
@@ -358,8 +358,8 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err error) {
 	}
 
 	//check for duplicate
-	switch routCh.Kind {
-	case Send:
+	switch routCh.Dir {
+	case reflect.SendDir:
 		if _, ok = ent.senders[routCh.Channel.Interface()]; ok {
 			err = errors.New(errDupAttachment)
 			s.LogError(err)
@@ -368,7 +368,7 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err error) {
 		} else {
 			ent.senders[routCh.Channel.Interface()] = routCh
 		}
-	case Recv:
+	case reflect.RecvDir:
 		if _, ok = ent.recvers[routCh.Channel.Interface()]; ok {
 			err = errors.New(errDupAttachment)
 			s.LogError(err)
@@ -384,15 +384,15 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err error) {
 
 	//find bindings for routedChan
 	if s.matchType == ExactMatch {
-		switch routCh.Kind {
-		case Send:
+		switch routCh.Dir {
+		case reflect.SendDir:
 			for _, recver := range ent.recvers {
 				if scope_match(routCh.Id, recver.Id) {
 					s.Log(LOG_INFO, fmt.Sprintf("add bindings: %v -> %v", routCh.Id, recver.Id))
 					matches = append(matches, recver)
 				}
 			}
-		case Recv:
+		case reflect.RecvDir:
 			for _, sender := range ent.senders {
 				if scope_match(sender.Id, routCh.Id) {
 					s.Log(LOG_INFO, fmt.Sprintf("add bindings: %v -> %v", sender.Id, routCh.Id))
@@ -404,16 +404,16 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err error) {
 		for _, ent2 := range s.routingTable {
 			if routCh.Id.Match(ent2.id) {
 				if routCh.Channel.Type() == ent2.chanType ||
-					(routCh.Kind == Recv && routCh.internalChan) {
-					switch routCh.Kind {
-					case Send:
+					(routCh.Dir == reflect.RecvDir && routCh.internalChan) {
+					switch routCh.Dir {
+					case reflect.SendDir:
 						for _, recver := range ent2.recvers {
 							if scope_match(routCh.Id, recver.Id) {
 								s.Log(LOG_INFO, fmt.Sprintf("add bindings: %v -> %v", routCh.Id, recver.Id))
 								matches = append(matches, recver)
 							}
 						}
-					case Recv:
+					case reflect.RecvDir:
 						for _, sender := range ent2.senders {
 							if scope_match(sender.Id, routCh.Id) {
 								s.Log(LOG_INFO, fmt.Sprintf("add bindings: %v -> %v", sender.Id, routCh.Id))
@@ -437,7 +437,7 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err error) {
 	//finished updating routing table
 	for i := 0; i < len(matches); i++ {
 		peer := matches[i]
-		if routCh.Kind == Send {
+		if routCh.Dir == reflect.SendDir {
 			routCh.attach(peer)
 		} else {
 			peer.attach(routCh)
@@ -454,10 +454,10 @@ func (s *routerImpl) attach(routCh *RoutedChan) (err error) {
 
 	//notifier will send in a separate goroutine, so non-blocking here
 	if idx < 0 && routCh.Id.Member() == MemberLocal { //not sys ids
-		switch routCh.Kind {
-		case Send:
+		switch routCh.Dir {
+		case reflect.SendDir:
 			s.notifier.notify(PubId, &ChanInfo{Id: routCh.Id, ChanType: routCh.Channel.Type()})
-		case Recv:
+		case reflect.RecvDir:
 			s.notifier.notify(SubId, &ChanInfo{Id: routCh.Id, ChanType: routCh.Channel.Type()})
 		}
 	}
@@ -500,14 +500,14 @@ func (s *routerImpl) detach(routCh *RoutedChan, bySelf bool) (err error) {
 	}
 
 	//force calling router.detach() from forwarding goroutine
-	if routCh1.Kind == Send && !bySelf {
+	if routCh1.Dir == reflect.SendDir && !bySelf {
 		routCh1.Close()
 		return
 	}
 
 	s.tblLock.Lock()
 
-	if routCh1.Kind == Send {
+	if routCh1.Dir == reflect.SendDir {
 		delete(ent.senders, routCh.Channel.Interface())
 	} else {
 		delete(ent.recvers, routCh.Channel.Interface())
@@ -516,7 +516,7 @@ func (s *routerImpl) detach(routCh *RoutedChan, bySelf bool) (err error) {
 	s.tblLock.Unlock()
 
 	//mark routCh1 to be detached
-	if routCh1.Kind == Recv {
+	if routCh1.Dir == reflect.RecvDir {
 		routCh1.bindLock.Lock()
 		if !routCh1.detached {
 			routCh1.detached = true
@@ -528,7 +528,7 @@ func (s *routerImpl) detach(routCh *RoutedChan, bySelf bool) (err error) {
 	//and detach recver from sender first
 	copySet := routCh1.Peers()
 	for _, v := range copySet {
-		if routCh1.Kind == Send {
+		if routCh1.Dir == reflect.SendDir {
 			routCh1.detach(v)
 		} else {
 			v.detach(routCh1)
@@ -541,10 +541,10 @@ func (s *routerImpl) detach(routCh *RoutedChan, bySelf bool) (err error) {
 	s.tblLock.Unlock()
 	idx := routCh1.Id.SysIdIndex()
 	if !routerClosed && idx < 0 && routCh1.Id.Member() == MemberLocal { //not sys ids
-		switch routCh1.Kind {
-		case Send:
+		switch routCh1.Dir {
+		case reflect.SendDir:
 			s.notifier.notify(UnPubId, &ChanInfo{Id: routCh1.Id, ChanType: routCh1.Channel.Type()})
-		case Recv:
+		case reflect.RecvDir:
 			s.notifier.notify(UnSubId, &ChanInfo{Id: routCh1.Id, ChanType: routCh1.Channel.Type()})
 		}
 	}
